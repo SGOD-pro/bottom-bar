@@ -18,3 +18,23 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+.screen-size-message {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .app-shell {
+    display: none !important;
+  }
+
+  .screen-size-message {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: #E8DCC6;
+    text-align: center;
+  }
+}

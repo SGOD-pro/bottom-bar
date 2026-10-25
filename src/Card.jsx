@@ -192,7 +192,7 @@ const Card = () => {
     const maxOffset = step * 3;
     const startOffset = activeIndex * step;
     const targetOffset = index * step;
-    const duration = 520;
+    const duration = 320;
     let startTime = null;
 
     indicator.style.setProperty('--drag-offset', `${startOffset}px`);
