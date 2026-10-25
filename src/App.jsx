@@ -7,7 +7,7 @@ function App() {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      background: '#ffffff',
+      background: '#E8DCC6',
     }}>
       <Card />
     </div>

@@ -144,7 +144,7 @@ export const buildLiquidGlassFilter = (element) => {
   return `<filter id="liquid-glass-filter" x="0%" y="0%" width="100%" height="100%">
     <feImage href="${displacementMap}" x="0" y="0" width="${width}" height="${height}" result="displacement" />
     <feDisplacementMap in="SourceGraphic" in2="displacement" scale="${maxDisplacement * controls.refFactor + width * controls.refDistance}" xChannelSelector="R" yChannelSelector="G" result="refracted" />
-    <feColorMatrix in="refracted" type="saturate" values="1.2" result="saturated" />
+    <feColorMatrix in="refracted" type="saturate" values="1.8" result="saturated" />
     <feImage href="${specularMap}" x="0" y="0" width="${width}" height="${height}" result="specular" />
     <feComposite in="saturated" in2="specular" operator="in" result="masked" />
     <feComponentTransfer in="specular" result="highlight">
