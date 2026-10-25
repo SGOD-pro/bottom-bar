@@ -5,7 +5,9 @@ import { buildLiquidGlassFilter } from './liquidGlass';
 const Card = () => {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [isAutoSliding, setIsAutoSliding] = useState(false);
   const indicatorRef = useRef(null);
+  const autoSlideRef = useRef(null);
   const impactAnimationRef = useRef(null);
   const filterDefsRef = useRef(null);
   const dragRef = useRef(null);
@@ -132,6 +134,13 @@ const Card = () => {
   const startDragging = (event) => {
     if (event.button !== 0) return;
 
+    if (autoSlideRef.current) {
+      cancelAnimationFrame(autoSlideRef.current.frameId);
+      autoSlideRef.current = null;
+      indicatorRef.current?.style.removeProperty('--drag-offset');
+      menuRef.current?.style.removeProperty('--pill-position');
+      setIsAutoSliding(false);
+    }
     impactAnimationRef.current?.cancel();
     impactAnimationRef.current = null;
     dragRef.current = {
@@ -164,7 +173,56 @@ const Card = () => {
   };
 
   const selectItem = (index) => {
-    setActiveIndex(index);
+    if (index === activeIndex) return;
+
+    if (autoSlideRef.current) {
+      cancelAnimationFrame(autoSlideRef.current.frameId);
+      autoSlideRef.current = null;
+    }
+
+    const menu = menuRef.current;
+    const indicator = indicatorRef.current;
+    if (!menu || !indicator) {
+      setActiveIndex(index);
+      return;
+    }
+
+    const menuWidth = menu.offsetWidth;
+    const step = (menuWidth - 40) / 4 + 8;
+    const maxOffset = step * 3;
+    const startOffset = activeIndex * step;
+    const targetOffset = index * step;
+    const duration = 520;
+    let startTime = null;
+
+    indicator.style.setProperty('--drag-offset', `${startOffset}px`);
+    menu.style.setProperty('--pill-position', activeIndex);
+    setIsAutoSliding(true);
+
+    const animateSlide = (timestamp) => {
+      if (startTime === null) startTime = timestamp;
+      const progress = Math.min((timestamp - startTime) / duration, 1);
+      const easedProgress = progress < 0.5
+        ? 4 * progress ** 3
+        : 1 - ((-2 * progress + 2) ** 3) / 2;
+      const offset = startOffset + (targetOffset - startOffset) * easedProgress;
+
+      indicator.style.setProperty('--drag-offset', `${offset}px`);
+      menu.style.setProperty('--pill-position', (offset / maxOffset) * 3);
+
+      if (progress < 1) {
+        autoSlideRef.current = { frameId: requestAnimationFrame(animateSlide) };
+        return;
+      }
+
+      autoSlideRef.current = null;
+      indicator.style.setProperty('--drag-offset', `${targetOffset}px`);
+      menu.style.setProperty('--pill-position', index);
+      setActiveIndex(index);
+      setIsAutoSliding(false);
+    };
+
+    autoSlideRef.current = { frameId: requestAnimationFrame(animateSlide) };
   };
 
   return (
@@ -174,7 +232,7 @@ const Card = () => {
       </svg>
       <div
         ref={menuRef}
-        className={`menu${isDragging ? ' is-dragging' : ''}`}
+        className={`menu${isDragging ? ' is-dragging' : ''}${isAutoSliding ? ' is-auto-sliding' : ''}`}
         style={{ '--active-index': activeIndex }}
         onPointerMove={selectItemUnderPointer}
         onPointerDown={startDragging}
@@ -282,6 +340,11 @@ const StyledWrapper = styled.div`
     transform: scale(1.02);
   }
 
+  .menu.is-auto-sliding {
+    background: #EBE0CC;
+    transform: scale(1.02);
+  }
+
   .menu::after {
     content: "";
     position: absolute;
@@ -348,7 +411,26 @@ const StyledWrapper = styled.div`
     opacity: 1;
   }
 
+  .menu.is-auto-sliding .active-indicator::after {
+    opacity: 1;
+  }
+
   .menu.is-dragging .active-indicator {
+    z-index: 3;
+    top: -12px;
+    bottom: -12px;
+    width: calc((100% - 40px) / 4 + 24px);
+    margin-left: -12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+    transform: translateX(var(--drag-offset));
+    transition:
+      width 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+      margin-left 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+      top 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+      bottom 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .menu.is-auto-sliding .active-indicator {
     z-index: 3;
     top: -12px;
     bottom: -12px;
@@ -427,6 +509,10 @@ const StyledWrapper = styled.div`
   }
 
   .menu.is-dragging .blue-overlay {
+    transition: none;
+  }
+
+  .menu.is-auto-sliding .blue-overlay {
     transition: none;
   }
 
