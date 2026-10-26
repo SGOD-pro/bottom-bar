@@ -411,7 +411,8 @@ const StyledWrapper = styled.div`
   -webkit-backdrop-filter: blur(12px) saturate(180%);
   backdrop-filter: blur(12px) saturate(180%);
 
-  opacity: 1;
+  background: rgba(255, 0, 0, 0.5) !important;
+  opacity: 1 !important;
 }
   
   
