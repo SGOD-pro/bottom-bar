@@ -2,6 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { buildLiquidGlassFilter } from './liquidGlass';
 
+const getPillTravel = (menu) => {
+  const menuWidth = menu.offsetWidth;
+  const menuBounds = menu.getBoundingClientRect();
+  const scale = menuBounds.width / menuWidth;
+  const pillWidth = (menuWidth - 40) / 4 + 8;
+  const minOffset = -menuBounds.left / scale - 2;
+  const maxOffset = (window.innerWidth - menuBounds.left) / scale - 2 - pillWidth;
+  const step = (maxOffset - minOffset) / 3;
+
+  return { menuOrigin: menuBounds.left, scale, pillWidth, minOffset, maxOffset, step };
+};
+
 const Card = () => {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -73,13 +85,8 @@ const Card = () => {
 
     const menu = event.currentTarget;
     const indicator = indicatorRef.current;
-    const menuBounds = menu.getBoundingClientRect();
-    const menuWidth = menu.offsetWidth;
-    const dragScale = drag.isDragging ? 1.02 : 1;
-    const menuLeft = menuBounds.left + (menuBounds.width - menuWidth) / 2;
-    const pointerOffset = (event.clientX - menuLeft) / dragScale;
-    const baseWidth = (menuWidth - 40) / 4;
-    const maxOffset = 3 * (baseWidth + 8);
+    const { menuOrigin, scale, pillWidth, minOffset, maxOffset, step } = getPillTravel(menu);
+    const pointerOffset = (event.clientX - menuOrigin) / scale;
 
     if (!drag.isDragging) {
       if (Math.abs(event.clientX - drag.startX) < 5) return;
@@ -89,16 +96,17 @@ const Card = () => {
       setIsDragging(true);
     }
 
-    const rawOffset = pointerOffset - 8 - baseWidth / 2;
+    const rawOffset = pointerOffset - pillWidth / 2 - 2;
     const previousOffset = drag.targetOffset;
     drag.targetOffset = Math.min(
-      Math.max(rawOffset, 0),
+      Math.max(rawOffset, minOffset),
       maxOffset,
     );
-    if (rawOffset < 0 && previousOffset > 0) animateEdgeImpact('left');
+    if (rawOffset < minOffset && previousOffset > minOffset) animateEdgeImpact('left');
     if (rawOffset > maxOffset && previousOffset < maxOffset) animateEdgeImpact('right');
-    drag.position = drag.targetOffset / (maxOffset / 3);
-    drag.maxOffset = maxOffset;
+    drag.position = (drag.targetOffset - minOffset) / step;
+    drag.minOffset = minOffset;
+    drag.step = step;
 
     if (drag.frameId === null) {
       const updatePosition = () => {
@@ -111,7 +119,7 @@ const Card = () => {
 
         indicator.style.setProperty('--drag-offset', `${currentDrag.currentOffset}px`);
         if (menuRef.current) {
-          const smoothPosition = currentDrag.currentOffset / (currentDrag.maxOffset / 3);
+          const smoothPosition = (currentDrag.currentOffset - currentDrag.minOffset) / currentDrag.step;
           menuRef.current.style.setProperty('--pill-position', smoothPosition);
         }
         const nextIndex = Math.round(currentDrag.position);
@@ -143,14 +151,21 @@ const Card = () => {
     }
     impactAnimationRef.current?.cancel();
     impactAnimationRef.current = null;
+    const menu = menuRef.current;
+    const travel = menu ? getPillTravel(menu) : null;
+    const startOffset = travel
+      ? 3 + activeIndex * ((menu.offsetWidth - 34) / 4 + 8)
+      : 0;
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
       isDragging: false,
-      targetOffset: 0,
-      currentOffset: 0,
+      targetOffset: startOffset,
+      currentOffset: startOffset,
       position: activeIndex,
       activeIndex,
+      minOffset: travel?.minOffset ?? 0,
+      step: travel?.step ?? 1,
       frameId: null,
     };
   };
@@ -187,10 +202,9 @@ const Card = () => {
       return;
     }
 
-    const menuWidth = menu.offsetWidth;
-    const step = (menuWidth - 40) / 4 + 8;
-    const startOffset = activeIndex * step;
-    const targetOffset = index * step;
+    const { minOffset, step } = getPillTravel(menu);
+    const startOffset = 3 + activeIndex * ((menu.offsetWidth - 34) / 4 + 8);
+    const targetOffset = minOffset + index * step;
     const duration = 320;
     let startTime = null;
     indicator.style.setProperty('--drag-offset', `${startOffset}px`);
@@ -205,7 +219,7 @@ const Card = () => {
         : 1 - ((-2 * progress + 2) ** 3) / 2;
       const offset = startOffset + (targetOffset - startOffset) * easedProgress;
       indicator.style.setProperty('--drag-offset', `${offset}px`);
-      menu.style.setProperty('--pill-position', (offset / (step * 3)) * 3);
+      menu.style.setProperty('--pill-position', (offset - minOffset) / step);
 
       if (progress < 1) {
         autoSlideRef.current = { frameId: requestAnimationFrame(animateSlide) };
