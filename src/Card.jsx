@@ -381,7 +381,7 @@ const StyledWrapper = styled.div`
     position: absolute;
     inset: 0;
     z-index: 1;
-    border: 1px solid rgba(200, 180, 150, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.3);
     border-radius: inherit;
     background-color: rgba(210, 190, 160, 0.22);
     pointer-events: none;
@@ -408,10 +408,6 @@ const StyledWrapper = styled.div`
   }
 
   .menu.is-dragging .active-indicator::after {
-    opacity: 1;
-  }
-
-  .menu.is-auto-sliding .active-indicator::after {
     opacity: 1;
   }
 
