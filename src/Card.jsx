@@ -316,11 +316,14 @@ const StyledWrapper = styled.div`
   justify-content: center;
 
   .filter-definitions {
-    position: absolute;
-    width: 0;
-    height: 0;
-    overflow: hidden;
-  }
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
 
   .menu {
     position: relative;
