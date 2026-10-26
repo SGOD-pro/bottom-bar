@@ -408,11 +408,9 @@ const StyledWrapper = styled.div`
   z-index: 0;
   border-radius: inherit;
 
-  -webkit-backdrop-filter: blur(12px) saturate(180%);
-  backdrop-filter: blur(12px) saturate(180%);
-
-  background: rgba(255, 0, 0, 0.5) !important;
-  opacity: 1 !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  opacity: 0;
 }
   
   
@@ -437,8 +435,10 @@ const StyledWrapper = styled.div`
 
 
   .menu.is-dragging .active-indicator::after {
-    opacity: 1;
-  }
+  opacity: 1;
+  -webkit-backdrop-filter: url(#liquid-glass-filter);
+  backdrop-filter: url(#liquid-glass-filter);
+}
 
   .menu.is-dragging .active-indicator {
     z-index: 3;
