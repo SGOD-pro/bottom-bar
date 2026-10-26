@@ -402,16 +402,24 @@ const StyledWrapper = styled.div`
   }
 
   .active-indicator::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  border-radius: inherit;
-
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  opacity: 0;
-}
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border-radius: inherit;
+    backdrop-filter: url(#liquid-glass-filter);
+    -webkit-backdrop-filter: url(#liquid-glass-filter);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    -webkit-mask-image:
+      linear-gradient(to right, black 0%, black 26%, transparent 38%, transparent 62%, black 74%, black 100%),
+      linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
+    -webkit-mask-composite: source-in;
+    mask-image:
+      linear-gradient(to right, black 0%, black 26%, transparent 38%, transparent 62%, black 74%, black 100%),
+      linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
+    mask-composite: intersect;
+  }
   
   
 /* Safari-safe fallback: preserve the glass appearance */
