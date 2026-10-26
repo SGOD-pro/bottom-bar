@@ -425,9 +425,9 @@ const StyledWrapper = styled.div`
 /* Safari-safe fallback: preserve the glass appearance */
 @supports (-webkit-backdrop-filter: blur(1px)) {
   .active-indicator::after {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    opacity: 0;
+    -webkit-backdrop-filter: url(#liquid-glass-filter);
+    backdrop-filter: url(#liquid-glass-filter);
+    opacity: 1;
     -webkit-mask-image: none;
     mask-image: none;
   }
