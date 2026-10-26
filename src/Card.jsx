@@ -420,6 +420,27 @@ const StyledWrapper = styled.div`
       linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
     mask-composite: intersect;
   }
+  
+  
+/* Safari-safe fallback: preserve the glass appearance */
+@supports (-webkit-backdrop-filter: blur(1px)) {
+  .active-indicator::after {
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    backdrop-filter: blur(12px) saturate(180%);
+    opacity: 1;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
+/* Keep the original custom SVG filter for browsers that support it */
+@supports not (-webkit-backdrop-filter: blur(1px)) {
+  .active-indicator::after {
+    backdrop-filter: url(#liquid-glass-filter);
+  }
+}
+
+
 
   .menu.is-dragging .active-indicator::after {
     opacity: 1;
