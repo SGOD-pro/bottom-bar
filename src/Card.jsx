@@ -238,7 +238,7 @@ const Card = () => {
 
   return (
     <StyledWrapper>
-      <svg className="filter-definitions" aria-hidden="true" colorInterpolationFilters="sRGB" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <svg className="filter-definitions" aria-hidden="true" colorInterpolationFilters="sRGB">
         <defs ref={filterDefsRef} />
       </svg>
       <div
