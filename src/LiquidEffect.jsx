@@ -140,19 +140,21 @@ function makeMap(w, h, r, bevel) {
         ny = (oy / l) * Math.sign(py);
       } else if (qx > qy) nx = Math.sign(px);
       else ny = Math.sign(py);
-      const edge =
-          d <= 0
-            ? Math.pow(
-                Math.max(0, 1 + d / Math.max(2, bevel * Math.min(w, h) * 0.4 * (1 - 0.2 * Math.abs(ny)))),
-                2.2,
-              )
-            : 0,
-        i = (y * c.width + x) * 4;
-      image.data[i] = 128 + 127 * 0.64 * edge * nx;
+      const isInside = d <= 0;
+      const edge = isInside
+        ? Math.pow(
+            Math.max(0, 1 + d / Math.max(2, bevel * Math.min(w, h) * 0.4 * (1 - 0.2 * Math.abs(ny)))),
+            2.2,
+          )
+        : 0;
       const t = Math.min(1, Math.abs(py) / (h * 0.5));
       const smooth = t * t * (3 - 2 * t);
-      const inner = 0.25 * Math.exp(-Math.pow(px / (w * 0.42), 2)) * smooth * Math.sign(py);
-      image.data[i + 1] = 128 + 127 * 0.64 * (edge * ny - inner);
+      const inner = isInside
+        ? 0.25 * Math.exp(-Math.pow(px / (w * 0.42), 2)) * smooth * Math.sign(py)
+        : 0;
+      const i = (y * c.width + x) * 4;
+      image.data[i] = 127.5 + 127.5 * 0.64 * edge * nx;
+      image.data[i + 1] = 127.5 + 127.5 * 0.64 * (edge * ny - inner);
       image.data[i + 2] = 128;
       image.data[i + 3] = 255;
     }
@@ -341,7 +343,8 @@ function SVG({ source, geometry: g, options: o }) {
   );
   if (!source || !map) return null;
   const bend = Math.min(g.width, g.height) * 0.24 * o.refr,
-    split = Math.min(g.width, g.height) * 0.03 * o.dispersion * o.refr;
+    split = Math.min(g.width, g.height) * 0.015 * o.dispersion * o.refr;
+  const pad = Math.ceil(bend + split + 24);
   return (
     <svg
       viewBox={`0 0 ${g.width} ${g.height}`}
@@ -362,26 +365,37 @@ function SVG({ source, geometry: g, options: o }) {
           id={`${id}-filter`}
           filterUnits="userSpaceOnUse"
           primitiveUnits="userSpaceOnUse"
-          x="0"
-          y="0"
-          width={g.width}
-          height={g.height}
+          x={-pad}
+          y={-pad}
+          width={g.width + pad * 2}
+          height={g.height + pad * 2}
           colorInterpolationFilters="sRGB"
         >
-          <feImage href={map} width={g.width} height={g.height} result="map" />
+          <feImage href={map} x="0" y="0" width={g.width} height={g.height} result="map" />
+          {/* Smooth 8-bit displacement quantization stepping */}
+          <feGaussianBlur in="map" stdDeviation="0.35" edgeMode="duplicate" x="0" y="0" width={g.width} height={g.height} result="smoothMap" />
+          {/* Only frost blurs the scene; at zero the captured labels stay sharp. */}
           <feGaussianBlur
             in="SourceGraphic"
             stdDeviation={o.frost * 0.8}
+            x={-pad}
+            y={-pad}
+            width={g.width + pad * 2}
+            height={g.height + pad * 2}
             result="soft"
           />
           {[-1, 0, 1].map((channel, i) => (
             <React.Fragment key={i}>
               <feDisplacementMap
                 in="soft"
-                in2="map"
+                in2="smoothMap"
                 scale={(-2 * (bend + channel * split)) / 0.64}
                 xChannelSelector="R"
                 yChannelSelector="G"
+                x="0"
+                y="0"
+                width={g.width}
+                height={g.height}
                 result={`s${i}`}
               />
               <feColorMatrix
@@ -394,6 +408,10 @@ function SVG({ source, geometry: g, options: o }) {
                     "0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0",
                   ][i]
                 }
+                x="0"
+                y="0"
+                width={g.width}
+                height={g.height}
                 result={`c${i}`}
               />
             </React.Fragment>
@@ -404,9 +422,36 @@ function SVG({ source, geometry: g, options: o }) {
             operator="arithmetic"
             k2="1"
             k3="1"
+            x="0"
+            y="0"
+            width={g.width}
+            height={g.height}
             result="rg"
           />
-          <feComposite in="rg" in2="c2" operator="arithmetic" k2="1" k3="1" />
+          <feComposite
+            in="rg"
+            in2="c2"
+            operator="arithmetic"
+            k2="1"
+            k3="1"
+            x="0"
+            y="0"
+            width={g.width}
+            height={g.height}
+            result="rgbSplit"
+          />
+          {/* Keep the central sample dominant so channel fringing is soft and cinematic */}
+          <feComposite
+            in="rgbSplit"
+            in2="s1"
+            operator="arithmetic"
+            k2="0.30"
+            k3="0.70"
+            x="0"
+            y="0"
+            width={g.width}
+            height={g.height}
+          />
         </filter>
         <linearGradient id={`${id}-light`} x1="0" y1="0" x2="1" y2="1">
           <stop stopColor="white" stopOpacity={o.shine * 0.2} />
