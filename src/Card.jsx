@@ -442,11 +442,6 @@ const StyledWrapper = styled.div`
       bottom: 0;
     }
 
-    .active-indicator,
-    .menu.is-auto-sliding .active-indicator {
-      top: 1px;
-      bottom: 1px;
-    }
   }
 
   .menu.is-dragging .active-indicator {
@@ -481,6 +476,19 @@ const StyledWrapper = styled.div`
 
   .menu.is-glass-moving .active-indicator {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  }
+
+  @supports (-webkit-touch-callout: none) {
+    .active-indicator,
+    .menu.is-auto-sliding .active-indicator {
+      top: 1px;
+      bottom: 1px;
+    }
+
+    .menu.is-dragging .active-indicator {
+      top: -2px;
+      bottom: -2px;
+    }
   }
 
   .menu a {
