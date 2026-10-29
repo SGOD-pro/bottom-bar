@@ -68,6 +68,15 @@ const Card = () => {
     }
 
     const rawOffset = pointerOffset - pillWidth / 2 - 5;
+    const isAtLeftEdge = rawOffset <= minOffset;
+    const isAtRightEdge = rawOffset >= maxOffset;
+    if ((isAtLeftEdge && !drag.isAtLeftEdge) || (isAtRightEdge && !drag.isAtRightEdge)) {
+      indicator.classList.remove('edge-bounce');
+      void indicator.offsetWidth;
+      indicator.classList.add('edge-bounce');
+    }
+    drag.isAtLeftEdge = isAtLeftEdge;
+    drag.isAtRightEdge = isAtRightEdge;
     drag.targetOffset = Math.min(
       Math.max(rawOffset, minOffset),
       maxOffset,
@@ -77,13 +86,17 @@ const Card = () => {
     drag.step = step;
 
     if (drag.frameId === null) {
-      const updatePosition = () => {
+      const updatePosition = (timestamp) => {
         const currentDrag = dragRef.current;
         if (!currentDrag) return;
 
+        const elapsed = currentDrag.lastFrameTime === null
+          ? 16.67
+          : Math.min(timestamp - currentDrag.lastFrameTime, 32);
+        currentDrag.lastFrameTime = timestamp;
         const distance = currentDrag.targetOffset - currentDrag.currentOffset;
-        currentDrag.currentOffset += distance * 0.4;
-        if (Math.abs(distance) < 0.15) currentDrag.currentOffset = currentDrag.targetOffset;
+        currentDrag.currentOffset += distance * (1 - Math.exp(-elapsed / 100));
+        if (Math.abs(distance) < 0.02) currentDrag.currentOffset = currentDrag.targetOffset;
 
         indicator.style.setProperty('--drag-offset', `${currentDrag.currentOffset}px`);
         indicator.style.setProperty('--edge-shift', `${edgeShift((currentDrag.currentOffset - currentDrag.minOffset) / currentDrag.step)}px`);
@@ -136,6 +149,9 @@ const Card = () => {
       minOffset: travel?.minOffset ?? 0,
       step: travel?.step ?? 1,
       frameId: null,
+      lastFrameTime: null,
+      isAtLeftEdge: false,
+      isAtRightEdge: false,
     };
   };
 
@@ -179,7 +195,7 @@ const Card = () => {
     const { minOffset, step } = getPillTravel(menu);
     const startOffset = minOffset + activeIndex * step;
     const targetOffset = minOffset + index * step;
-    const duration = 320;
+    const duration = 420;
     let startTime = null;
     indicator.style.setProperty('--drag-offset', `${startOffset}px`);
     indicator.style.setProperty('--edge-shift', `${edgeShift(activeIndex)}px`);
@@ -218,6 +234,9 @@ const Card = () => {
 
   return (
     <StyledWrapper>
+      <div className="unavailable-message" role="status">
+        Nav bar not available
+      </div>
       <div
         ref={menuRef}
         className={`menu${isDragging ? ' is-dragging' : ''}${isAutoSliding ? ' is-auto-sliding' : ''}${(isAutoSliding || isDragging || isSettling) ? ' is-glass-moving' : ''}`}
@@ -312,11 +331,15 @@ const StyledWrapper = styled.div`
   flex-direction: column;
   gap: 24px;
 
+  .unavailable-message {
+    display: none;
+  }
+
   .menu {
     position: relative;
-    width: calc(100% - 40px);
-    max-width: 440px;
-    background: #E8DCC6;
+    width: 100%;
+    max-width: 403px;
+    background: #dfcdad;
     border: 1px solid var(--glass-border);
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
     padding: 5px;
@@ -328,7 +351,18 @@ const StyledWrapper = styled.div`
     touch-action: pan-y;
     transition:
       background-color 0.24s ease,
-      transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+      transform 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.38s ease;
+  }
+
+  .menu.is-dragging {
+    transform: scale(1.025);
+    opacity: 0.78;
+  }
+
+  .menu:active:not(.is-dragging) {
+    transform: scale(1.025);
+    opacity: 0.78;
   }
 
   .menu::after {
@@ -347,16 +381,16 @@ const StyledWrapper = styled.div`
   .active-indicator {
     position: absolute;
     z-index: 3;
-    top: 1px;
-    bottom: 1px;
-    left: 5px;
-    width: calc((100% - 34px) / 4);
+    top: 3px;
+    bottom: 3px;
+    left: 6px;
+    width: calc((100% - 66px) / 4);
     margin-left: 0;
     isolation: isolate;
     background: rgba(255, 255, 255, 0.16);
     border: 1px solid rgba(255, 255, 255, 0.5);
-    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.10), inset 0 1px 1px rgba(255, 255, 255, 0.55);
-    transform: translateX(calc(var(--active-index) * (100% + 8px)));
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.55);
+    transform: translateX(calc(var(--active-index) * (100% + 15.5px)));
     transition:
       transform 0.42s cubic-bezier(0.22, 1, 0.36, 1),
       border-radius 0.18s ease,
@@ -366,6 +400,19 @@ const StyledWrapper = styled.div`
       top 0.24s cubic-bezier(0.22, 1, 0.36, 1),
       bottom 0.24s cubic-bezier(0.22, 1, 0.36, 1);
     pointer-events: none;
+  }
+
+  .active-indicator.edge-bounce {
+    animation: edge-bounce 700ms ease-out;
+  }
+
+  @keyframes edge-bounce {
+    0%, 100% {
+      scale: 1 1;
+    }
+    35% {
+      scale: 1 0.78;
+    }
   }
 
   /* Show the existing lens for the whole drag, without an extra fade mask. */
@@ -393,6 +440,7 @@ const StyledWrapper = styled.div`
     z-index: 3;
     top: 0;
     bottom: 0;
+    left: 5px;
     width: calc((100% - 34px) / 4);
     margin-left: 0;
     transform: translateX(calc(var(--drag-offset) + var(--edge-shift, 0px)));
@@ -405,11 +453,12 @@ const StyledWrapper = styled.div`
 
   .menu.is-auto-sliding .active-indicator {
     z-index: 3;
-    top: 0;
-    bottom: 0;
-    width: calc((100% - 34px) / 4);
+    top: 3px;
+    bottom: 3px;
+    left: 6px;
+    width: calc((100% - 66px) / 4);
     margin-left: 0;
-    transform: translateX(calc(var(--drag-offset) + var(--edge-shift, 0px)));
+    transform: translateX(var(--drag-offset));
     transition:
       width 0.24s cubic-bezier(0.22, 1, 0.36, 1),
       margin-left 0.24s cubic-bezier(0.22, 1, 0.36, 1),
@@ -505,6 +554,32 @@ const StyledWrapper = styled.div`
     transform: scale(0.98);
   }
 
+  @media (max-width: 370px) {
+    .menu {
+      display: none;
+    }
+
+    .unavailable-message {
+      display: block;
+      color: #000;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .menu {
+      display: none;
+    }
+
+    .unavailable-message {
+      display: block;
+      color: #000;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .active-indicator {
       transition-duration: 0.01ms;
@@ -512,4 +587,3 @@ const StyledWrapper = styled.div`
   }`;
 
 export default Card;
-

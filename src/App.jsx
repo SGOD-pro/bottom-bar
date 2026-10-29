@@ -9,8 +9,8 @@ function App() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#3e311b',
-        padding: '24px 16px',
+        background: '#E8DCC6',
+        padding: '24px 8px',
       }}
     >
       <Card />
