@@ -32,6 +32,9 @@ const DEFAULT_GLASS = {
 const edgeShift = (position) => 6 * (Math.min(1, Math.max(0, position - 2)) - Math.max(0, 1 - position));
 
 const Card = () => {
+  const isIOS = typeof navigator !== 'undefined'
+    && (/iPhone|iPad|iPod/.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
   const [activeIndex, setActiveIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [isAutoSliding, setIsAutoSliding] = useState(false);
@@ -239,7 +242,7 @@ const Card = () => {
       </div>
       <div
         ref={menuRef}
-        className={`menu${isDragging ? ' is-dragging' : ''}${isAutoSliding ? ' is-auto-sliding' : ''}${(isAutoSliding || isDragging || isSettling) ? ' is-glass-moving' : ''}`}
+        className={`menu${isIOS ? ' is-ios' : ''}${isDragging ? ' is-dragging' : ''}${isAutoSliding ? ' is-auto-sliding' : ''}${(isAutoSliding || isDragging || isSettling) ? ' is-glass-moving' : ''}`}
         style={{ '--active-index': activeIndex }}
         onPointerMove={selectItemUnderPointer}
         onPointerDown={startDragging}
@@ -436,12 +439,27 @@ const StyledWrapper = styled.div`
     opacity: 1;
   }
 
+  .menu.is-ios.is-glass-moving .moving-glass {
+    top: 0;
+    bottom: 0;
+  }
+
+  .menu.is-ios .active-indicator,
+  .menu.is-ios.is-auto-sliding .active-indicator {
+    top: -1px;
+    bottom: -1px;
+  }
+
+  .menu.is-ios.is-dragging .active-indicator {
+    top: -4px;
+    bottom: -4px;
+  }
+
   @supports (-webkit-touch-callout: none) {
     .menu.is-glass-moving .moving-glass {
       top: 0;
       bottom: 0;
     }
-
   }
 
   .menu.is-dragging .active-indicator {
@@ -476,19 +494,6 @@ const StyledWrapper = styled.div`
 
   .menu.is-glass-moving .active-indicator {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
-  }
-
-  @supports (-webkit-touch-callout: none) {
-    .active-indicator,
-    .menu.is-auto-sliding .active-indicator {
-      top: 1px;
-      bottom: 1px;
-    }
-
-    .menu.is-dragging .active-indicator {
-      top: -2px;
-      bottom: -2px;
-    }
   }
 
   .menu a {
