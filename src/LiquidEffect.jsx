@@ -3,15 +3,19 @@ import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 // The lens samples a reconstructed snapshot of the supplied navbar.
 // WebGL cannot read pixels from unrelated HTML behind a canvas.
 const VS = `attribute vec2 a; varying vec2 uv; void main(){uv=a*.5+.5;gl_Position=vec4(a,0.,1.);}`;
-const FS = `precision mediump float;
+const FS = `#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
 varying vec2 uv; uniform sampler2D tex; uniform vec2 box, scene, origin;
 uniform float refr,bevel,dispersion,frost,shine,radius,tintOpacity;
 uniform vec3 tint;
 float sd(vec2 p){vec2 q=abs(p)-(box*.5-vec2(radius));return length(max(q,0.))+min(max(q.x,q.y),0.)-radius;}
 vec2 normal(vec2 p){vec2 q=abs(p)-(box*.5-vec2(radius));vec2 s=vec2(p.x<0.?-1.:1.,p.y<0.?-1.:1.);vec2 o=max(q,0.);if(o.x>0.&&o.y>0.)return normalize(o)*s;return q.x>q.y?vec2(s.x,0.):vec2(0.,s.y);}
 vec3 at(vec2 p){return texture2D(tex,clamp(vec2(p.x/scene.x,1.-p.y/scene.y),vec2(0.),vec2(1.))).rgb;}
-vec3 blurred(vec2 p){float sigma=frost*2.4;vec3 sum=vec3(0.);float total=0.;for(int y=-2;y<=2;y++){for(int x=-2;x<=2;x++){vec2 q=vec2(float(x),float(y));float w=exp(-.5*dot(q,q));sum+=at(p+q*sigma)*w;total+=w;}}return sum/total;}
-void main(){vec2 p=vec2(uv.x*box.x,(1.-uv.y)*box.y);vec2 v=p-box*.5;float d=sd(v);float mask=1.-smoothstep(-.75,.75,d);vec2 n=normal(v);float band=max(2.,bevel*min(box.x,box.y)*.4);float edge=pow(1.-clamp(max(-d,0.)/band,0.,1.),2.2);vec2 delta=edge*(n-vec2(.25*abs(n.y),0.));float bend=min(box.x,box.y)*.24*refr;float split=min(box.x,box.y)*.03*dispersion*refr;vec2 src=origin+p-delta*bend;vec3 c=vec3(blurred(src+delta*split).r,blurred(src).g,blurred(src-delta*split).b);c=mix(c,tint,tintOpacity);float rim=exp(-max(-d,0.)/1.2);float face=max(dot(n,normalize(vec2(-1.,-1.))),0.);c+=vec3(shine*(rim*(.07+.2*face)+edge*edge*.035*face));gl_FragColor=vec4(c,mask);}`;
+vec3 blurred(vec2 p){float sigma=frost*.8;vec3 sum=vec3(0.);float total=0.;for(int y=-2;y<=2;y++){for(int x=-2;x<=2;x++){vec2 q=vec2(float(x),float(y));float w=exp(-.5*dot(q,q));sum+=at(p+q*sigma)*w;total+=w;}}return sum/total;}
+void main(){vec2 p=vec2(uv.x*box.x,(1.-uv.y)*box.y);vec2 v=p-box*.5;float d=sd(v);float mask=1.-smoothstep(-.75,.75,d);vec2 n=normal(v);float band=max(2.,bevel*min(box.x,box.y)*.4*(1.-.2*abs(n.y)));float edge=pow(1.-clamp(max(-d,0.)/band,0.,1.),2.2);float center=exp(-pow(v.x/(box.x*.42),2.));float inner=.25*center*smoothstep(0.,box.y*.5,abs(v.y));vec2 delta=edge*n-vec2(0.,sign(v.y)*inner);float bend=min(box.x,box.y)*.24*refr;float split=min(box.x,box.y)*.03*dispersion*refr;vec2 src=origin+p-delta*bend;vec3 c=vec3(blurred(src+delta*split).r,blurred(src).g,blurred(src-delta*split).b);c=mix(c,tint,tintOpacity);float rim=exp(-max(-d,0.)/1.2);float face=max(dot(n,normalize(vec2(-1.,-1.))),0.);c+=vec3(shine*(rim*(.07+.2*face)+edge*edge*.035*face));gl_FragColor=vec4(c,mask);}`;
 const clamp = (v, min, max) =>
   Math.max(min, Math.min(max, Number.isFinite(Number(v)) ? Number(v) : min));
 function color3(value) {
@@ -25,6 +29,27 @@ function xml(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+// The scene includes space around the menu so its edges can be refracted.
+// This resolves solid ancestor backgrounds; image/gradient and live DOM
+// backgrounds must be provided as a scene by a different capture mechanism.
+const SCENE_PADDING = 96;
+function surroundingColor(menu) {
+  let node = menu.parentElement;
+  while (node) {
+    const color = getComputedStyle(node).backgroundColor;
+    // Canvas normalizes browser CSS colors to RGBA for an opacity check.
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return "#ffffff";
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, 1, 1);
+    if (ctx.getImageData(0, 0, 1, 1).data[3] === 255) return color;
+    node = node.parentElement;
+  }
+  return "#ffffff";
 }
 function capture(menu, activeIndex = 0, activeColor = "#722F37") {
   const rect = menu.getBoundingClientRect(),
@@ -67,11 +92,15 @@ function capture(menu, activeIndex = 0, activeColor = "#722F37") {
       elements += `<text x="${(r.left + r.width / 2 - rect.left) / sx}" y="${(r.top - rect.top) / sy + parseFloat(c.fontSize)}" text-anchor="middle" fill="${xml(color)}" font-family="${xml(fontFamily)}" font-size="${parseFloat(c.fontSize)}" font-weight="${xml(fontWeight)}">${xml(label.textContent)}</text>`;
     }
   });
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="${xml(bg)}"/>${elements}</svg>`;
+  const padding = SCENE_PADDING;
+  const sceneWidth = width + padding * 2;
+  const sceneHeight = height + padding * 2;
+  const outside = surroundingColor(menu);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sceneWidth * 2}" height="${sceneHeight * 2}" viewBox="0 0 ${sceneWidth} ${sceneHeight}"><rect width="100%" height="100%" fill="${xml(outside)}"/><g transform="translate(${padding} ${padding})"><rect width="${width}" height="${height}" rx="${Math.min(width, height) / 2}" fill="${xml(bg)}"/>${elements}</g></svg>`;
   return {
     url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
-    width,
-    height,
+    width: sceneWidth,
+    height: sceneHeight,
     bg,
   };
 }
@@ -81,23 +110,23 @@ function measure(menu, lens) {
   const sx = a.width / menu.offsetWidth || 1,
     sy = a.height / menu.offsetHeight || 1;
   return {
-    x: (b.left - a.left) / sx,
-    y: (b.top - a.top) / sy,
+    x: SCENE_PADDING + (b.left - a.left) / sx,
+    y: SCENE_PADDING + (b.top - a.top) / sy,
     width: b.width / sx,
     height: b.height / sy,
   };
 }
 function makeMap(w, h, r, bevel) {
   const c = document.createElement("canvas");
-  c.width = Math.max(2, Math.round(w * 2));
-  c.height = Math.max(2, Math.round(h * 2));
+  c.width = Math.max(2, Math.round(w * 3));
+  c.height = Math.max(2, Math.round(h * 3));
   const ctx = c.getContext("2d");
   if (!ctx) return "";
   const image = ctx.createImageData(c.width, c.height);
   for (let y = 0; y < c.height; y++)
     for (let x = 0; x < c.width; x++) {
-      const px = (x + 0.5) / 2 - w / 2,
-        py = (y + 0.5) / 2 - h / 2,
+      const px = (x + 0.5) / 3 - w / 2,
+        py = (y + 0.5) / 3 - h / 2,
         qx = Math.abs(px) - (w / 2 - r),
         qy = Math.abs(py) - (h / 2 - r),
         ox = Math.max(qx, 0),
@@ -111,16 +140,21 @@ function makeMap(w, h, r, bevel) {
         ny = (oy / l) * Math.sign(py);
       } else if (qx > qy) nx = Math.sign(px);
       else ny = Math.sign(py);
-      const edge =
-          d <= 0
-            ? Math.pow(
-                Math.max(0, 1 + d / Math.max(2, bevel * Math.min(w, h) * 0.4)),
-                2.2,
-              )
-            : 0,
-        i = (y * c.width + x) * 4;
-      image.data[i] = 128 + 127 * 0.64 * edge * (nx - 0.25 * Math.abs(ny));
-      image.data[i + 1] = 128 + 127 * 0.64 * edge * ny;
+      const isInside = d <= 0;
+      const edge = isInside
+        ? Math.pow(
+            Math.max(0, 1 + d / Math.max(2, bevel * Math.min(w, h) * 0.4 * (1 - 0.2 * Math.abs(ny)))),
+            2.2,
+          )
+        : 0;
+      const t = Math.min(1, Math.abs(py) / (h * 0.5));
+      const smooth = t * t * (3 - 2 * t);
+      const inner = isInside
+        ? 0.25 * Math.exp(-Math.pow(px / (w * 0.42), 2)) * smooth * Math.sign(py)
+        : 0;
+      const i = (y * c.width + x) * 4;
+      image.data[i] = 127.5 + 127.5 * 0.64 * edge * nx;
+      image.data[i + 1] = 127.5 + 127.5 * 0.64 * (edge * ny - inner);
       image.data[i + 2] = 128;
       image.data[i + 3] = 255;
     }
@@ -309,7 +343,8 @@ function SVG({ source, geometry: g, options: o }) {
   );
   if (!source || !map) return null;
   const bend = Math.min(g.width, g.height) * 0.24 * o.refr,
-    split = Math.min(g.width, g.height) * 0.03 * o.dispersion * o.refr;
+    split = Math.min(g.width, g.height) * 0.015 * o.dispersion * o.refr;
+  const pad = Math.ceil(bend + split + 24);
   return (
     <svg
       viewBox={`0 0 ${g.width} ${g.height}`}
@@ -330,26 +365,37 @@ function SVG({ source, geometry: g, options: o }) {
           id={`${id}-filter`}
           filterUnits="userSpaceOnUse"
           primitiveUnits="userSpaceOnUse"
-          x="0"
-          y="0"
-          width={g.width}
-          height={g.height}
+          x={-pad}
+          y={-pad}
+          width={g.width + pad * 2}
+          height={g.height + pad * 2}
           colorInterpolationFilters="sRGB"
         >
-          <feImage href={map} width={g.width} height={g.height} result="map" />
+          <feImage href={map} x="0" y="0" width={g.width} height={g.height} result="map" />
+          {/* Smooth 8-bit displacement quantization stepping */}
+          <feGaussianBlur in="map" stdDeviation="0.35" edgeMode="duplicate" x="0" y="0" width={g.width} height={g.height} result="smoothMap" />
+          {/* Only frost blurs the scene; at zero the captured labels stay sharp. */}
           <feGaussianBlur
             in="SourceGraphic"
-            stdDeviation={o.frost * 2.4}
+            stdDeviation={o.frost * 0.8}
+            x={-pad}
+            y={-pad}
+            width={g.width + pad * 2}
+            height={g.height + pad * 2}
             result="soft"
           />
           {[-1, 0, 1].map((channel, i) => (
             <React.Fragment key={i}>
               <feDisplacementMap
                 in="soft"
-                in2="map"
+                in2="smoothMap"
                 scale={(-2 * (bend + channel * split)) / 0.64}
                 xChannelSelector="R"
                 yChannelSelector="G"
+                x="0"
+                y="0"
+                width={g.width}
+                height={g.height}
                 result={`s${i}`}
               />
               <feColorMatrix
@@ -362,6 +408,10 @@ function SVG({ source, geometry: g, options: o }) {
                     "0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0",
                   ][i]
                 }
+                x="0"
+                y="0"
+                width={g.width}
+                height={g.height}
                 result={`c${i}`}
               />
             </React.Fragment>
@@ -372,9 +422,36 @@ function SVG({ source, geometry: g, options: o }) {
             operator="arithmetic"
             k2="1"
             k3="1"
+            x="0"
+            y="0"
+            width={g.width}
+            height={g.height}
             result="rg"
           />
-          <feComposite in="rg" in2="c2" operator="arithmetic" k2="1" k3="1" />
+          <feComposite
+            in="rg"
+            in2="c2"
+            operator="arithmetic"
+            k2="1"
+            k3="1"
+            x="0"
+            y="0"
+            width={g.width}
+            height={g.height}
+            result="rgbSplit"
+          />
+          {/* Keep the central sample dominant so channel fringing is soft and cinematic */}
+          <feComposite
+            in="rgbSplit"
+            in2="s1"
+            operator="arithmetic"
+            k2="0.30"
+            k3="0.70"
+            x="0"
+            y="0"
+            width={g.width}
+            height={g.height}
+          />
         </filter>
         <linearGradient id={`${id}-light`} x1="0" y1="0" x2="1" y2="1">
           <stop stopColor="white" stopOpacity={o.shine * 0.2} />
@@ -383,7 +460,6 @@ function SVG({ source, geometry: g, options: o }) {
         </linearGradient>
       </defs>
       <g clipPath={`url(#${id}-clip)`}>
-        <rect width={g.width} height={g.height} fill="#E8DCC6" />
         <image
           href={source.url}
           x={-g.x}

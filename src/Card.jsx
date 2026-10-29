@@ -6,10 +6,10 @@ const getPillTravel = (menu) => {
   const menuWidth = menu.offsetWidth;
   const menuBounds = menu.getBoundingClientRect();
   const scale = menuBounds.width / menuWidth;
-  const pillWidth = (menuWidth - 40) / 4 + 8;
+  const pillWidth = (menuWidth - 34) / 4;
   // Indicator offsets are relative to the menu, not the browser viewport.
   const items = menu.querySelectorAll('a[data-index]');
-  const minOffset = 3;
+  const minOffset = 0;
   const step = items.length > 1 ? items[1].offsetLeft - items[0].offsetLeft : (menuWidth - pillWidth) / 3;
   const maxOffset = minOffset + Math.max(0, items.length - 1) * step;
 
@@ -18,69 +18,37 @@ const getPillTravel = (menu) => {
 
 const DEFAULT_GLASS = {
   renderer: 'webgl',
-  refraction: 1.0,
-  bevel: 0.6,
-  dispersion: 0.45,
-  frost: 0.15,
-  shine: 0.6,
-  roundness: 0.7,
+  refraction: .90,
+  bevel: 0.55,
+  dispersion: 0.80,
+  frost: 0.05,
+  shine: 1.00,
+  roundness: 1.0,
   tint: '#dfeeff',
   tintOpacity: 0.08,
 };
 
-const TAB_NAMES = ['Home', 'Files', 'Plans', 'Settings'];
-
-const CONTROLS = [
-  { key: 'refraction', label: 'Refraction', max: 1.5 },
-  { key: 'bevel', label: 'Bevel', max: 1.0 },
-  { key: 'dispersion', label: 'Dispersion', max: 1.0 },
-  { key: 'frost', label: 'Frost', max: 1.0 },
-  { key: 'shine', label: 'Shine', max: 1.0 },
-  { key: 'roundness', label: 'Roundness', max: 1.0 },
-  { key: 'tintOpacity', label: 'Tint Opacity', max: 0.5 },
-];
+// Gradually add extra travel at the first and last tabs.
+const edgeShift = (position) => 6 * (Math.min(1, Math.max(0, position - 2)) - Math.max(0, 1 - position));
 
 const Card = () => {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [isAutoSliding, setIsAutoSliding] = useState(false);
   const indicatorRef = useRef(null);
+  const lensRef = useRef(null);
+  const [isSettling, setIsSettling] = useState(false);
+  const settleTimerRef = useRef(null);
   const autoSlideRef = useRef(null);
-  const impactAnimationRef = useRef(null);
   const dragRef = useRef(null);
   const menuRef = useRef(null);
 
-  const [glass, setGlass] = useState(DEFAULT_GLASS);
+  const glass = DEFAULT_GLASS;
   useEffect(() => () => {
     if (autoSlideRef.current) cancelAnimationFrame(autoSlideRef.current.frameId);
     if (dragRef.current?.frameId != null) cancelAnimationFrame(dragRef.current.frameId);
-    impactAnimationRef.current?.cancel();
+    clearTimeout(settleTimerRef.current);
   }, []);
-
-  const animateEdgeImpact = (edge) => {
-    const indicator = indicatorRef.current;
-    if (!indicator || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-    impactAnimationRef.current?.cancel();
-    const transformOrigin = edge === 'right' ? 'right center' : 'center';
-    const keyframes = [
-      { scale: '1 1', transformOrigin, offset: 0 },
-      { scale: '1 0.72', transformOrigin, offset: 0.55 },
-      { scale: '1.025 1.025', transformOrigin, offset: 0.86 },
-      { scale: '1 1', transformOrigin, offset: 1 },
-    ];
-    const animation = indicator.animate(
-      keyframes,
-      {
-        duration: 1250,
-        easing: 'cubic-bezier(0.22, 0.75, 0.25, 1)',
-      },
-    );
-    impactAnimationRef.current = animation;
-    animation.onfinish = () => {
-      if (impactAnimationRef.current === animation) impactAnimationRef.current = null;
-    };
-  };
 
   const selectItemUnderPointer = (event) => {
     const drag = dragRef.current;
@@ -99,14 +67,11 @@ const Card = () => {
       setIsDragging(true);
     }
 
-    const rawOffset = pointerOffset - pillWidth / 2 - 2;
-    const previousOffset = drag.targetOffset;
+    const rawOffset = pointerOffset - pillWidth / 2 - 5;
     drag.targetOffset = Math.min(
       Math.max(rawOffset, minOffset),
       maxOffset,
     );
-    if (rawOffset < minOffset && previousOffset > minOffset) animateEdgeImpact('left');
-    if (rawOffset > maxOffset && previousOffset < maxOffset) animateEdgeImpact('right');
     drag.position = (drag.targetOffset - minOffset) / step;
     drag.minOffset = minOffset;
     drag.step = step;
@@ -121,6 +86,7 @@ const Card = () => {
         if (Math.abs(distance) < 0.15) currentDrag.currentOffset = currentDrag.targetOffset;
 
         indicator.style.setProperty('--drag-offset', `${currentDrag.currentOffset}px`);
+        indicator.style.setProperty('--edge-shift', `${edgeShift((currentDrag.currentOffset - currentDrag.minOffset) / currentDrag.step)}px`);
         if (menuRef.current) {
           const smoothPosition = (currentDrag.currentOffset - currentDrag.minOffset) / currentDrag.step;
           menuRef.current.style.setProperty('--pill-position', smoothPosition);
@@ -144,6 +110,8 @@ const Card = () => {
 
   const startDragging = (event) => {
     if (event.button !== 0) return;
+    clearTimeout(settleTimerRef.current);
+    setIsSettling(false);
 
     if (autoSlideRef.current) {
       cancelAnimationFrame(autoSlideRef.current.frameId);
@@ -152,8 +120,6 @@ const Card = () => {
       menuRef.current?.style.removeProperty('--pill-position');
       setIsAutoSliding(false);
     }
-    impactAnimationRef.current?.cancel();
-    impactAnimationRef.current = null;
     const menu = menuRef.current;
     const travel = menu ? getPillTravel(menu) : null;
     const startOffset = travel
@@ -184,6 +150,9 @@ const Card = () => {
 
     if (drag.frameId !== null) cancelAnimationFrame(drag.frameId);
     dragRef.current = null;
+    setIsSettling(true);
+    clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = setTimeout(() => setIsSettling(false), 180);
     indicatorRef.current.style.removeProperty('--drag-offset');
     menuRef.current?.style.removeProperty('--pill-position');
     setActiveIndex(Math.round(drag.position));
@@ -192,6 +161,8 @@ const Card = () => {
 
   const selectItem = (index) => {
     if (index === activeIndex) return;
+    clearTimeout(settleTimerRef.current);
+    setIsSettling(false);
 
     if (autoSlideRef.current) {
       cancelAnimationFrame(autoSlideRef.current.frameId);
@@ -211,6 +182,7 @@ const Card = () => {
     const duration = 320;
     let startTime = null;
     indicator.style.setProperty('--drag-offset', `${startOffset}px`);
+    indicator.style.setProperty('--edge-shift', `${edgeShift(activeIndex)}px`);
     menu.style.setProperty('--pill-position', activeIndex);
     setIsAutoSliding(true);
     setActiveIndex(index);
@@ -223,6 +195,7 @@ const Card = () => {
         : 1 - ((-2 * progress + 2) ** 3) / 2;
       const offset = startOffset + (targetOffset - startOffset) * easedProgress;
       indicator.style.setProperty('--drag-offset', `${offset}px`);
+      indicator.style.setProperty('--edge-shift', `${edgeShift((offset - minOffset) / step)}px`);
       menu.style.setProperty('--pill-position', (offset - minOffset) / step);
 
       if (progress < 1) {
@@ -235,6 +208,9 @@ const Card = () => {
       menu.style.setProperty('--pill-position', index);
       setActiveIndex(index);
       setIsAutoSliding(false);
+      setIsSettling(true);
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = setTimeout(() => setIsSettling(false), 180);
     };
 
     autoSlideRef.current = { frameId: requestAnimationFrame(animateSlide) };
@@ -244,7 +220,7 @@ const Card = () => {
     <StyledWrapper>
       <div
         ref={menuRef}
-        className={`menu${isDragging ? ' is-dragging' : ''}${isAutoSliding ? ' is-auto-sliding' : ''}`}
+        className={`menu${isDragging ? ' is-dragging' : ''}${isAutoSliding ? ' is-auto-sliding' : ''}${(isAutoSliding || isDragging || isSettling) ? ' is-glass-moving' : ''}`}
         style={{ '--active-index': activeIndex }}
         onPointerMove={selectItemUnderPointer}
         onPointerDown={startDragging}
@@ -313,99 +289,14 @@ const Card = () => {
             borderRadius: `${Math.round(4 + glass.roundness * 22)}px`,
           }}
         >
+          <div ref={lensRef} className="moving-glass">
           <LiquidGlassEffect
             menuRef={menuRef}
-            lensRef={indicatorRef}
+            lensRef={lensRef}
             activeIndex={activeIndex}
             activeColor="#722F37"
             {...glass}
           />
-        </div>
-      </div>
-      <div className="glass-controller-card" aria-label="Glass Controller">
-        <div className="controller-header">
-          <div className="controller-title-group">
-            <div className="controller-title-row">
-              <span className="controller-title">Glass Controller</span>
-              <span className="active-badge">Active: {TAB_NAMES[activeIndex] || 'Home'}</span>
-            </div>
-            <p className="controller-subtitle">Fine-tune refraction, dispersion, and gloss in real time</p>
-          </div>
-          <div className="controller-actions">
-            <div className="renderer-toggle" role="group" aria-label="Renderer selection">
-              <button
-                type="button"
-                className={`toggle-btn ${glass.renderer === 'webgl' ? 'is-active' : ''}`}
-                onClick={() => setGlass(old => ({ ...old, renderer: 'webgl' }))}
-              >
-                WebGL
-              </button>
-              <button
-                type="button"
-                className={`toggle-btn ${glass.renderer === 'svg' ? 'is-active' : ''}`}
-                onClick={() => setGlass(old => ({ ...old, renderer: 'svg' }))}
-              >
-                SVG
-              </button>
-            </div>
-            <button
-              type="button"
-              className="reset-btn"
-              onClick={() => setGlass(DEFAULT_GLASS)}
-            >
-              Reset
-            </button>
-          </div>
-        </div>
-
-        <div className="controller-grid">
-          {CONTROLS.map(({ key, label, max }) => (
-            <div key={key} className="control-item">
-              <div className="control-header">
-                <span className="control-label">{label}</span>
-                <span className="control-value">{glass[key].toFixed(2)}</span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max={max}
-                step="0.01"
-                value={glass[key]}
-                onChange={event => setGlass(old => ({ ...old, [key]: Number(event.target.value) }))}
-                className="control-slider"
-                aria-label={label}
-              />
-            </div>
-          ))}
-          <div className="control-item">
-            <div className="control-header">
-              <span className="control-label">Tint Color</span>
-              <span className="control-value" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                <span className="tint-dot-preview" style={{ backgroundColor: glass.tint }} />
-                {glass.tint.toUpperCase()}
-              </span>
-            </div>
-            <div className="tint-picker-row">
-              <input
-                type="color"
-                value={glass.tint}
-                onChange={event => setGlass(old => ({ ...old, tint: event.target.value }))}
-                className="tint-color-picker"
-                aria-label="Choose tint color"
-              />
-              <div className="tint-presets" role="group" aria-label="Preset tint colors">
-                {['#dfeeff', '#a78bfa', '#f472b6', '#38bdf8', '#4ade80'].map(c => (
-                  <button
-                    key={c}
-                    type="button"
-                    className={`tint-preset-dot ${glass.tint.toLowerCase() === c.toLowerCase() ? 'is-active' : ''}`}
-                    style={{ backgroundColor: c }}
-                    onClick={() => setGlass(old => ({ ...old, tint: c }))}
-                    aria-label={`Tint ${c}`}
-                  />
-                ))}
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -440,16 +331,6 @@ const StyledWrapper = styled.div`
       transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .menu.is-dragging {
-    background: #EBE0CC;
-    transform: scale(1.02);
-  }
-
-  .menu.is-auto-sliding {
-    background: #EBE0CC;
-    transform: scale(1.02);
-  }
-
   .menu::after {
     content: "";
     position: absolute;
@@ -472,13 +353,9 @@ const StyledWrapper = styled.div`
     width: calc((100% - 34px) / 4);
     margin-left: 0;
     isolation: isolate;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.45);
-    box-shadow:
-      0 4px 14px rgba(0, 0, 0, 0.14),
-      0 1px 3px rgba(0, 0, 0, 0.08),
-      inset 0 1px 1px rgba(255, 255, 255, 0.65),
-      inset 0 -1px 1px rgba(0, 0, 0, 0.06);
+    background: rgba(255, 255, 255, 0.16);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.10), inset 0 1px 1px rgba(255, 255, 255, 0.55);
     transform: translateX(calc(var(--active-index) * (100% + 8px)));
     transition:
       transform 0.42s cubic-bezier(0.22, 1, 0.36, 1),
@@ -491,18 +368,34 @@ const StyledWrapper = styled.div`
     pointer-events: none;
   }
 
+  /* Show the existing lens for the whole drag, without an extra fade mask. */
+  .moving-glass {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    border-radius: inherit;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: inset 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 320ms ease;
+  }
+  .menu.is-glass-moving .moving-glass {
+    top: -10px;
+    bottom: -10px;
+    left: -14px;
+    right: -14px;
+    opacity: 1;
+  }
+
   .menu.is-dragging .active-indicator {
     z-index: 3;
-    top: -4px;
-    bottom: -4px;
-    width: calc((100% - 40px) / 4 + 8px);
-    margin-left: -3px;
-    box-shadow:
-      0 8px 24px rgba(0, 0, 0, 0.2),
-      0 2px 6px rgba(0, 0, 0, 0.12),
-      inset 0 1px 1px rgba(255, 255, 255, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.6);
-    transform: translateX(var(--drag-offset));
+    top: 0;
+    bottom: 0;
+    width: calc((100% - 34px) / 4);
+    margin-left: 0;
+    transform: translateX(calc(var(--drag-offset) + var(--edge-shift, 0px)));
     transition:
       width 0.24s cubic-bezier(0.22, 1, 0.36, 1),
       margin-left 0.24s cubic-bezier(0.22, 1, 0.36, 1),
@@ -512,21 +405,20 @@ const StyledWrapper = styled.div`
 
   .menu.is-auto-sliding .active-indicator {
     z-index: 3;
-    top: -4px;
-    bottom: -4px;
-    width: calc((100% - 40px) / 4 + 8px);
-    margin-left: -3px;
-    box-shadow:
-      0 8px 24px rgba(0, 0, 0, 0.2),
-      0 2px 6px rgba(0, 0, 0, 0.12),
-      inset 0 1px 1px rgba(255, 255, 255, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.6);
-    transform: translateX(var(--drag-offset));
+    top: 0;
+    bottom: 0;
+    width: calc((100% - 34px) / 4);
+    margin-left: 0;
+    transform: translateX(calc(var(--drag-offset) + var(--edge-shift, 0px)));
     transition:
       width 0.24s cubic-bezier(0.22, 1, 0.36, 1),
       margin-left 0.24s cubic-bezier(0.22, 1, 0.36, 1),
       top 0.24s cubic-bezier(0.22, 1, 0.36, 1),
       bottom 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .menu.is-glass-moving .active-indicator {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
   }
 
   .menu a {
@@ -611,279 +503,6 @@ const StyledWrapper = styled.div`
 
   .menu a:active {
     transform: scale(0.98);
-  }
-
-  .glass-controller-card {
-    width: min(580px, calc(100% - 32px));
-    background: #111216;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 20px;
-    padding: 24px;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
-    color: #ffffff;
-    box-sizing: border-box;
-  }
-
-  .controller-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-  }
-
-  .controller-title-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .controller-title-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .controller-title {
-    font-size: 19px;
-    font-weight: 700;
-    color: #ffffff;
-    letter-spacing: -0.01em;
-  }
-
-  .active-badge {
-    display: inline-flex;
-    align-items: center;
-    background: rgba(139, 92, 246, 0.2);
-    color: #c4b5fd;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 2px 10px;
-    border-radius: 9999px;
-    border: 1px solid rgba(139, 92, 246, 0.35);
-  }
-
-  .controller-subtitle {
-    font-size: 13px;
-    color: #8e929b;
-    margin: 0;
-    line-height: 1.4;
-  }
-
-  .controller-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .renderer-toggle {
-    display: inline-flex;
-    background: #1b1c23;
-    padding: 3px;
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
-  .toggle-btn {
-    border: none;
-    background: transparent;
-    color: #8e929b;
-    font-size: 13px;
-    font-weight: 600;
-    padding: 6px 14px;
-    border-radius: 7px;
-    cursor: pointer;
-    transition: all 0.18s ease;
-  }
-
-  .toggle-btn.is-active {
-    background: #8b5cf6;
-    color: #ffffff;
-    box-shadow: 0 2px 10px rgba(139, 92, 246, 0.4);
-  }
-
-  .reset-btn {
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: #1b1c23;
-    color: #d1d5db;
-    font-size: 13px;
-    font-weight: 500;
-    padding: 7px 16px;
-    border-radius: 10px;
-    cursor: pointer;
-    transition: all 0.18s ease;
-  }
-
-  .reset-btn:hover {
-    background: rgba(255, 255, 255, 0.12);
-    color: #ffffff;
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-
-  .controller-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-  }
-
-  @media (max-width: 520px) {
-    .controller-grid {
-      grid-template-columns: 1fr;
-    }
-    .controller-header {
-      flex-direction: column;
-      align-items: stretch;
-    }
-    .controller-actions {
-      justify-content: space-between;
-    }
-  }
-
-  .control-item {
-    background: #17181f;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 14px;
-    padding: 12px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    transition: border-color 0.18s ease;
-  }
-
-  .control-item:hover {
-    border-color: rgba(255, 255, 255, 0.12);
-  }
-
-  .control-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .control-label {
-    font-size: 14px;
-    font-weight: 500;
-    color: #e5e7eb;
-  }
-
-  .control-value {
-    font-size: 14px;
-    font-weight: 700;
-    color: #8b5cf6;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .control-slider {
-    width: 100%;
-    height: 5px;
-    -webkit-appearance: none;
-    appearance: none;
-    background: #2a2c37;
-    border-radius: 999px;
-    outline: none;
-    margin: 4px 0;
-    cursor: pointer;
-    accent-color: #8b5cf6;
-  }
-
-  .control-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #a78bfa;
-    border: 2px solid #8b5cf6;
-    cursor: grab;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
-    transition: transform 0.1s ease;
-  }
-
-  .control-slider::-webkit-slider-thumb:hover {
-    transform: scale(1.15);
-  }
-
-  .control-slider::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #a78bfa;
-    border: 2px solid #8b5cf6;
-    cursor: grab;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
-  }
-
-  .tint-dot-preview {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    display: inline-block;
-  }
-
-  .tint-picker-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 24px;
-    margin-top: -2px;
-  }
-
-  .tint-color-picker {
-    flex: 1;
-    height: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 999px;
-    padding: 0;
-    background: none;
-    cursor: pointer;
-    outline: none;
-    transition: border-color 0.15s ease;
-  }
-
-  .tint-color-picker:hover {
-    border-color: rgba(255, 255, 255, 0.35);
-  }
-
-  .tint-color-picker::-webkit-color-swatch-wrapper {
-    padding: 0;
-  }
-
-  .tint-color-picker::-webkit-color-swatch {
-    border: none;
-    border-radius: 999px;
-  }
-
-  .tint-color-picker::-moz-color-swatch {
-    border: none;
-    border-radius: 999px;
-  }
-
-  .tint-presets {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .tint-preset-dot {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    cursor: pointer;
-    padding: 0;
-    outline: none;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-  }
-
-  .tint-preset-dot:hover {
-    transform: scale(1.2);
-  }
-
-  .tint-preset-dot.is-active {
-    box-shadow: 0 0 0 2px #111216, 0 0 0 3.5px #8b5cf6;
-    transform: scale(1.15);
   }
 
   @media (prefers-reduced-motion: reduce) {
