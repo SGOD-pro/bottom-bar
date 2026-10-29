@@ -441,6 +441,12 @@ const StyledWrapper = styled.div`
       top: 0;
       bottom: 0;
     }
+
+    .active-indicator,
+    .menu.is-auto-sliding .active-indicator {
+      top: 1px;
+      bottom: 1px;
+    }
   }
 
   .menu.is-dragging .active-indicator {
