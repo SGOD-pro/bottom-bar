@@ -436,13 +436,6 @@ const StyledWrapper = styled.div`
     opacity: 1;
   }
 
-  @supports (-webkit-touch-callout: none) {
-    .menu.is-glass-moving .moving-glass {
-      top: 0;
-      bottom: 0;
-    }
-  }
-
   .menu.is-dragging .active-indicator {
     z-index: 3;
     top: 0;
