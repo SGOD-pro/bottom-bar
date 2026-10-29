@@ -342,13 +342,13 @@ const StyledWrapper = styled.div`
     background: #dfcdad;
     border: 1px solid var(--glass-border);
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
-    padding: 5px;
+    padding: 8px 5px;
     border-radius: 99rem;
     display: flex;
     justify-content: center;
     gap: 8px;
     z-index: 50;
-    touch-action: pan-y;
+    touch-action: none;
     transition:
       background-color 0.24s ease,
       transform 0.38s cubic-bezier(0.22, 1, 0.36, 1),
@@ -496,8 +496,8 @@ const StyledWrapper = styled.div`
 
   .blue-overlay {
     position: absolute;
-    top: 5px;
-    bottom: 5px;
+    top: 8px;
+    bottom: 8px;
     left: 5px;
     right: 5px;
     display: flex;
