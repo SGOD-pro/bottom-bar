@@ -464,6 +464,19 @@ const StyledWrapper = styled.div`
     pointer-events: none;
   }
 
+  .active-indicator.edge-bounce {
+    animation: edge-bounce 700ms ease-out;
+  }
+
+  @keyframes edge-bounce {
+    0%, 100% {
+      scale: 1 1;
+    }
+    35% {
+      scale: 1 0.78;
+    }
+  }
+
   /* Show the existing lens for the whole drag, without an extra fade mask. */
   .moving-glass {
     position: absolute;
@@ -600,6 +613,32 @@ const StyledWrapper = styled.div`
 
   .menu a:active {
     transform: scaleY(var(--icon-counter-scale));
+  }
+
+  @media (max-width: 370px) {
+    .menu {
+      display: none;
+    }
+
+    .unavailable-message {
+      display: block;
+      color: #000;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .menu {
+      display: none;
+    }
+
+    .unavailable-message {
+      display: block;
+      color: #000;
+      font-size: 0.9rem;
+      text-align: center;
+    }
   }
 
   @media (max-width: 370px) {
