@@ -9,7 +9,7 @@ function App() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#3e311b',
+        background: 'rgb(232, 220, 198',
         padding: '24px 16px',
       }}
     >

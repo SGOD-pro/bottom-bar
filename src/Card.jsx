@@ -316,7 +316,7 @@ const StyledWrapper = styled.div`
     position: relative;
     width: calc(100% - 40px);
     max-width: 440px;
-    background: #E8DCC6;
+    background: #dfcdad;
     border: 1px solid var(--glass-border);
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
     padding: 5px;
@@ -509,7 +509,22 @@ const StyledWrapper = styled.div`
     .active-indicator {
       transition-duration: 0.01ms;
     }
-  }`;
+  }
+  .menu.is-glass-moving .active-indicator {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* Match the moving lens to the capsule shape used by roundness: 1.
+   Explicit clipping prevents its rectangular canvas/fallback from
+   extending into the corners. */
+.menu.is-glass-moving .moving-glass {
+  border-radius: 9999px;
+  -webkit-clip-path: inset(0 round 9999px);
+  clip-path: inset(0 round 9999px);
+}  
+  `;
 
 export default Card;
 
