@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
 import LiquidGlassEffect from './LiquidEffect';
-
+import { Home } from "lucide-react"
 const getPillTravel = (menu, isIOS = false) => {
   const menuWidth = menu.offsetWidth;
   const menuBounds = menu.getBoundingClientRect();
@@ -10,7 +10,9 @@ const getPillTravel = (menu, isIOS = false) => {
   // Indicator offsets are relative to the menu, not the browser viewport.
   const items = menu.querySelectorAll('a[data-index]');
   const minOffset = 0;
-  const step = items.length > 1 ? items[1].offsetLeft - items[0].offsetLeft : (menuWidth - pillWidth) / 3;
+  const step = items.length > 1
+    ? (items[1].getBoundingClientRect().left - items[0].getBoundingClientRect().left) / (scale || 1)
+    : (menuWidth - pillWidth) / 3;
   const maxOffset = minOffset + Math.max(0, items.length - 1) * step;
 
   return { menuOrigin: menuBounds.left, scale, pillWidth, minOffset, maxOffset, step, menuWidth };
@@ -18,18 +20,24 @@ const getPillTravel = (menu, isIOS = false) => {
 
 const DEFAULT_GLASS = {
   renderer: 'webgl',
-  refraction: .85,
-  bevel: 0.50,
+  refraction: .77,
+  bevel: 0.42,
   dispersion: 0.80,
   frost: 0.05,
   shine: 1.00,
   roundness: 1.0,
-  tint: '#dfeeff',
+  tint: '#dfeeff3b',
   tintOpacity: 0.08,
 };
 
 // Gradually add extra travel at the first and last tabs.
 const edgeShift = (position) => 6 * (Math.min(1, Math.max(0, position - 2)) - Math.max(0, 1 - position));
+
+// Damped spring for the shell: bounded time step keeps low frame rates stable.
+const springStep = (value, velocity, target, dt) => {
+  const nextVelocity = velocity + ((target - value) * 170 - velocity * 24) * dt;
+  return [value + nextVelocity * dt, nextVelocity];
+};
 
 const Card = () => {
   const [isIOS] = useState(() => typeof navigator !== 'undefined' && (
@@ -48,6 +56,20 @@ const Card = () => {
   const menuRef = useRef(null);
 
   const glass = DEFAULT_GLASS;
+  // The resting pill and pointer-driven pill use the same measured tab pitch.
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const updatePitch = () => {
+      const { step } = getPillTravel(menu, isIOS);
+      if (step > 0) menu.style.setProperty('--tab-step', `${step}px`);
+    };
+    updatePitch();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updatePitch) : null;
+    observer?.observe(menu);
+    window.addEventListener('resize', updatePitch);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', updatePitch); };
+  }, [isIOS]);
   useEffect(() => () => {
     if (autoSlideRef.current) cancelAnimationFrame(autoSlideRef.current.frameId);
     if (dragRef.current?.frameId != null) cancelAnimationFrame(dragRef.current.frameId);
@@ -74,16 +96,7 @@ const Card = () => {
       setIsDragging(true);
     }
 
-    const rawOffset = pointerOffset - pillWidth / 2 - (isIOS ? 6 : 5);
-    const isAtLeftEdge = rawOffset <= minOffset;
-    const isAtRightEdge = rawOffset >= maxOffset;
-    if ((isAtLeftEdge && !drag.isAtLeftEdge) || (isAtRightEdge && !drag.isAtRightEdge)) {
-      indicator.classList.remove('edge-bounce');
-      void indicator.offsetWidth;
-      indicator.classList.add('edge-bounce');
-    }
-    drag.isAtLeftEdge = isAtLeftEdge;
-    drag.isAtRightEdge = isAtRightEdge;
+    const rawOffset = pointerOffset - pillWidth / 2 - (isIOS ? 9 : 5);
     drag.targetOffset = Math.min(
       Math.max(rawOffset, minOffset),
       maxOffset,
@@ -102,17 +115,60 @@ const Card = () => {
           : Math.min(timestamp - currentDrag.lastFrameTime, 32);
         currentDrag.lastFrameTime = timestamp;
         const distance = currentDrag.targetOffset - currentDrag.currentOffset;
+        const previousOffset = currentDrag.currentOffset;
         currentDrag.currentOffset += distance * (1 - Math.exp(-elapsed / 55));
         if (Math.abs(distance) < 0.02) currentDrag.currentOffset = currentDrag.targetOffset;
 
-        // The glass trails the moving pointer slightly, then springs to center.
-        const wobble = Math.max(-6, Math.min(6, distance * 0.20));
-        const stretch = 1 + Math.min(Math.abs(wobble) * 0.009, 0.054);
+        // Mid-bar: a little stretch from motion. Near an end: narrower.
+        const position = (currentDrag.currentOffset - currentDrag.minOffset) / currentDrag.step;
+        const last = (currentDrag.travel.maxOffset - currentDrag.minOffset) / currentDrag.step;
+        const endDistance = Math.min(position, last - position);
+        const endWeight = Math.max(0, Math.min(1, 1 - endDistance / 0.7));
+        // Keep the outer edge steady while the lens compresses at either end.
+        const leftWeight = Math.max(0, Math.min(1, 1 - position / 0.7));
+        const rightWeight = Math.max(0, Math.min(1, 1 - (last - position) / 0.7));
+        const edgeOrigin = 50 + 50 * (rightWeight - leftWeight);
+        const goalShift = Math.max(-5, Math.min(5, -distance * 0.22)) * (1 - 0.85 * endWeight);
+        const goalScale = 1 - 0.12 * endWeight + (1 - endWeight) * Math.min(Math.abs(distance) * 0.012, 0.12);
+        // A restrained rubber-band response: stretching horizontally narrows
+        // the lens vertically; compression near the ends makes it taller.
+        const goalScaleY = Math.max(0.94, Math.min(1.05, 1 - (goalScale - 1) * 0.5));
+        const dt = Math.min(elapsed, 32) / 1000;
+        // Fire once when crossing into the 3px wall zone, not while held there.
+        const WALL_ZONE_PX = 2;
+        const WALL_IMPACT_SPEED = 2.5; // larger = stronger compression
+        const leftWall = currentDrag.minOffset + WALL_ZONE_PX;
+        const rightWall = currentDrag.travel.maxOffset - WALL_ZONE_PX;
+        const crossedLeft = previousOffset > leftWall && currentDrag.currentOffset <= leftWall && distance < 0;
+        const crossedRight = previousOffset < rightWall && currentDrag.currentOffset >= rightWall && distance > 0;
+        if (crossedLeft || crossedRight) {
+          currentDrag.wallSide = crossedLeft ? 'left' : 'right';
+          currentDrag.wallVelocity = -WALL_IMPACT_SPEED;
+        }
+        // Independent damped spring: squash, rebound, then settle at zero.
+        const wallSteps = Math.ceil(dt / (1 / 120));
+        const wallDt = dt / wallSteps;
+        for (let i = 0; i < wallSteps; i++) {
+          currentDrag.wallVelocity += (-40 * currentDrag.wallSquash - 18 * currentDrag.wallVelocity) * wallDt;
+          currentDrag.wallSquash += currentDrag.wallVelocity * wallDt;
+        }
+        if (currentDrag.wallSide) {
+          if (Math.abs(currentDrag.wallSquash) < 0.0005 && Math.abs(currentDrag.wallVelocity) < 0.01) {
+            currentDrag.wallSquash = 0;
+            currentDrag.wallVelocity = 0;
+            currentDrag.wallSide = null;
+          }
+        }
+        [currentDrag.jellyX, currentDrag.jellyVelocity] = springStep(currentDrag.jellyX, currentDrag.jellyVelocity, goalShift, dt);
+        [currentDrag.jellyScale, currentDrag.scaleVelocity] = springStep(currentDrag.jellyScale, currentDrag.scaleVelocity, goalScale, dt);
+        [currentDrag.jellyScaleY, currentDrag.scaleVelocityY] = springStep(currentDrag.jellyScaleY, currentDrag.scaleVelocityY, goalScaleY, dt);
+        const wobble = currentDrag.jellyX;
+        const stretch = currentDrag.jellyScale;
+        const heightStretch = currentDrag.jellyScaleY * (1 + currentDrag.wallSquash);
+        indicator.style.setProperty('--jelly-origin', `${edgeOrigin}%`);
         indicator.style.setProperty('--jelly-shift', `${wobble}px`);
         indicator.style.setProperty('--jelly-stretch', `${stretch}`);
-        // Counter-transform the rendered scene so the icons stay in place.
-        indicator.style.setProperty('--scene-shift', `${-wobble / stretch}px`);
-        indicator.style.setProperty('--scene-scale', `${1 / stretch}`);
+        indicator.style.setProperty('--jelly-stretch-y', `${heightStretch}`);
         indicator.style.setProperty('--drag-offset', `${currentDrag.currentOffset}px`);
         indicator.style.setProperty('--edge-shift', `${edgeShift((currentDrag.currentOffset - currentDrag.minOffset) / currentDrag.step)}px`);
         if (menuRef.current) {
@@ -125,15 +181,22 @@ const Card = () => {
           setActiveIndex(nextIndex);
         }
 
-        if (currentDrag.currentOffset !== currentDrag.targetOffset) {
+        const stillMoving = Math.abs(currentDrag.currentOffset - currentDrag.targetOffset) > 0.02;
+        const stillSettling = Math.abs(currentDrag.jellyX - goalShift) > 0.03 ||
+          Math.abs(currentDrag.jellyVelocity) > 0.1 ||
+          Math.abs(currentDrag.jellyScale - goalScale) > 0.001 ||
+          Math.abs(currentDrag.scaleVelocity) > 0.01 ||
+          Math.abs(currentDrag.jellyScaleY - goalScaleY) > 0.001 ||
+          Math.abs(currentDrag.scaleVelocityY) > 0.01 ||
+          Math.abs(currentDrag.wallSquash) > 0.0005 ||
+          Math.abs(currentDrag.wallVelocity) > 0.01;
+        if (stillMoving || stillSettling) {
           currentDrag.frameId = requestAnimationFrame(updatePosition);
         } else {
           currentDrag.frameId = null;
-          indicator.style.setProperty('--jelly-shift', '0px');
-          indicator.style.setProperty('--jelly-stretch', '1');
-          indicator.style.setProperty('--scene-shift', '0px');
-          indicator.style.setProperty('--scene-scale', '1');
+          currentDrag.lastFrameTime = null;
         }
+
       };
 
       drag.frameId = requestAnimationFrame(updatePosition);
@@ -171,8 +234,15 @@ const Card = () => {
       step: travel?.step ?? 1,
       frameId: null,
       lastFrameTime: null,
-      isAtLeftEdge: false,
-      isAtRightEdge: false,
+      jellyX: 0,
+      jellyVelocity: 0,
+      jellyScale: 1,
+      scaleVelocity: 0,
+      jellyScaleY: 1,
+      scaleVelocityY: 0,
+      wallSquash: 0,
+      wallVelocity: 0,
+      wallSide: null,
     };
   };
 
@@ -192,8 +262,7 @@ const Card = () => {
     settleTimerRef.current = setTimeout(() => setIsSettling(false), 420);
     indicatorRef.current.style.setProperty('--jelly-shift', '0px');
     indicatorRef.current.style.setProperty('--jelly-stretch', '1');
-    indicatorRef.current.style.setProperty('--scene-shift', '0px');
-    indicatorRef.current.style.setProperty('--scene-scale', '1');
+    indicatorRef.current.style.setProperty('--jelly-stretch-y', '1');
     // Keep the drag transform valid until the dragging class is removed.
     if (!isIOS) indicatorRef.current.style.removeProperty('--drag-offset');
     menuRef.current?.style.removeProperty('--pill-position');
@@ -272,59 +341,31 @@ const Card = () => {
         onPointerUp={stopDragging}
         onPointerCancel={stopDragging}
       >
-        <div className="blue-overlay" aria-hidden="true">
-          <div className="blue-item">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M11.47 3.841a.75.75 0 0 1 1.06 0l8.69 8.69a.75.75 0 1 0 1.06-1.061l-8.689-8.69a2.25 2.25 0 0 0-3.182 0l-8.69 8.69a.75.75 0 1 0 1.061 1.06l8.69-8.689Z" />
-              <path d="m12 5.432 8.159 8.159c.03.03.06.058.091.086v6.198c0 1.035-.84 1.875-1.875 1.875H15a.75.75 0 0 1-.75-.75v-4.5a.75.75 0 0 0-.75-.75h-3a.75.75 0 0 0-.75.75V21a.75.75 0 0 1-.75.75H5.625a1.875 1.875 0 0 1-1.875-1.875v-6.198a2.29 2.29 0 0 0 .091-.086L12 5.432Z" />
-            </svg>
-            <span>Home</span>
-          </div>
-          <div className="blue-item">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M19.5 21a3 3 0 0 0 3-3v-4.5a3 3 0 0 0-3-3h-15a3 3 0 0 0-3 3V18a3 3 0 0 0 3 3h15ZM1.5 10.146V6a3 3 0 0 1 3-3h5.379a2.25 2.25 0 0 1 1.59.659l2.122 2.121c.14.141.331.22.53.22H19.5a3 3 0 0 1 3 3v1.146A4.483 4.483 0 0 0 19.5 9h-15a4.483 4.483 0 0 0-3 1.146Z" />
-            </svg>
-            <span>Files</span>
-          </div>
-          <div className="blue-item">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-              <path fillRule="evenodd" d="M6.75 2.25A.75.75 0 0 1 7.5 3v1.5h9V3A.75.75 0 0 1 18 3v1.5h.75a3 3 0 0 1 3 3v11.25a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3V7.5a3 3 0 0 1 3-3H6V3a.75.75 0 0 1 .75-.75Zm13.5 9a1.5 1.5 0 0 0-1.5-1.5H5.25a1.5 1.5 0 0 0-1.5 1.5v7.5a1.5 1.5 0 0 0 1.5 1.5h13.5a1.5 1.5 0 0 0 1.5-1.5v-7.5Z" clipRule="evenodd" />
-            </svg>
-            <span>Plans</span>
-          </div>
-          <div className="blue-item">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M17.004 10.407c.138.435-.216.842-.672.842h-3.465a.75.75 0 0 1-.65-.375l-1.732-3c-.229-.396-.053-.907.393-1.004a5.252 5.252 0 0 1 6.126 3.537ZM8.12 8.464c.307-.338.838-.235 1.066.16l1.732 3a.75.75 0 0 1 0 .75l-1.732 3c-.229.397-.76.5-1.067.161A5.23 5.23 0 0 1 6.75 12a5.23 5.23 0 0 1 1.37-3.536ZM10.878 17.13c-.447-.098-.623-.608-.394-1.004l1.733-3.002a.75.75 0 0 1 .65-.375h3.465c.457 0 .81.407.672.842a5.252 5.252 0 0 1-6.126 3.539Z" />
-              <path fillRule="evenodd" d="M21 12.75a.75.75 0 1 0 0-1.5h-.783a8.22 8.22 0 0 0-.237-1.357l.734-.267a.75.75 0 1 0-.513-1.41l-.735.268a8.24 8.24 0 0 0-.689-1.192l.6-.503a.75.75 0 1 0-.964-1.149l-.6.504a8.3 8.3 0 0 0-1.054-.885l.391-.678a.75.75 0 1 0-1.299-.75l-.39.676a8.188 8.188 0 0 0-1.295-.47l.136-.77a.75.75 0 0 0-1.477-.26l-.136.77a8.36 8.36 0 0 0-1.377 0l-.136-.77a.75.75 0 1 0-1.477.26l.136.77c-.448.121-.88.28-1.294.47l-.39-.676a.75.75 0 0 0-1.3.75l.392.678a8.29 8.29 0 0 0-1.054.885l-.6-.504a.75.75 0 1 0-.965 1.149l.6.503a8.243 8.243 0 0 0-.689 1.192L3.8 8.216a.75.75 0 1 0-.513 1.41l.735.267a8.222 8.222 0 0 0-.238 1.356h-.783a.75.75 0 0 0 0 1.5h.783c.042.464.122.917.238 1.356l-.735.268a.75.75 0 0 0 .513 1.41l.735-.268c.197.417.428.816.69 1.191l-.6.504a.75.75 0 0 0 .963 1.15l.601-.505c.326.323.679.62 1.054.885l-.392.68a.75.75 0 0 0 1.3.75l.39-.679c.414.192.847.35 1.294.471l-.136.77a.75.75 0 0 0 1.477.261l.137-.772a8.332 8.332 0 0 0 1.376 0l.136.772a.75.75 0 1 0 1.477-.26l-.136-.771a8.19 8.19 0 0 0 1.294-.47l.391.677a.75.75 0 0 0 1.3-.75l-.393-.679a8.29 8.29 0 0 0 1.054-.885l.601.504a.75.75 0 0 0 .964-1.15l-.6-.503c.261-.375.492-.774.69-1.191l.735.267a.75.75 0 1 0 .512-1.41l-.734-.267c.115-.439.195-.892.237-1.356h.784Zm-2.657-3.06a6.744 6.744 0 0 0-1.19-2.053 6.784 6.784 0 0 0-1.82-1.51A6.705 6.705 0 0 0 12 5.25a6.8 6.8 0 0 0-1.225.11 6.7 6.7 0 0 0-2.15.793 6.784 6.784 0 0 0-2.952 3.489.76.76 0 0 1-.036.098A6.74 6.74 0 0 0 5.251 12a6.74 6.74 0 0 0 3.366 5.842l.009.005a6.704 6.704 0 0 0 2.18.798l.022.003a6.792 6.792 0 0 0 2.368-.004 6.704 6.704 0 0 0 2.205-.811 6.785 6.785 0 0 0 1.762-1.484l.009-.01.009-.01a6.743 6.743 0 0 0 1.18-2.066c.253-.707.39-1.469.39-2.263a6.74 6.74 0 0 0-.408-2.309Z" clipRule="evenodd" />
-            </svg>
-            <span>Settings</span>
-          </div>
-        </div>
         <a href="#" draggable="false" className={activeIndex === 0 ? 'active' : ''} data-index={0} onClick={(event) => { event.preventDefault(); selectItem(0); }}>
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="size-6">
-            <path d="M11.47 3.841a.75.75 0 0 1 1.06 0l8.69 8.69a.75.75 0 1 0 1.06-1.061l-8.689-8.69a2.25 2.25 0 0 0-3.182 0l-8.69 8.69a.75.75 0 1 0 1.061 1.06l8.69-8.689Z" />
-            <path d="m12 5.432 8.159 8.159c.03.03.06.058.091.086v6.198c0 1.035-.84 1.875-1.875 1.875H15a.75.75 0 0 1-.75-.75v-4.5a.75.75 0 0 0-.75-.75h-3a.75.75 0 0 0-.75.75V21a.75.75 0 0 1-.75.75H5.625a1.875 1.875 0 0 1-1.875-1.875v-6.198a2.29 2.29 0 0 0 .091-.086L12 5.432Z" />
-          </svg>
+          <Home />
           <span>Home</span>
         </a>
         <a href="#" draggable="false" className={activeIndex === 1 ? 'active' : ''} data-index={1} onClick={(event) => { event.preventDefault(); selectItem(1); }}>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="size-6">
             <path d="M19.5 21a3 3 0 0 0 3-3v-4.5a3 3 0 0 0-3-3h-15a3 3 0 0 0-3 3V18a3 3 0 0 0 3 3h15ZM1.5 10.146V6a3 3 0 0 1 3-3h5.379a2.25 2.25 0 0 1 1.59.659l2.122 2.121c.14.141.331.22.53.22H19.5a3 3 0 0 1 3 3v1.146A4.483 4.483 0 0 0 19.5 9h-15a4.483 4.483 0 0 0-3 1.146Z" />
           </svg>
-          <span>Files</span>
+          <span>About</span>
         </a>
         <a href="#" draggable="false" className={activeIndex === 2 ? 'active' : ''} data-index={2} onClick={(event) => { event.preventDefault(); selectItem(2); }}>
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="size-6">
-            <path fillRule="evenodd" d="M6.75 2.25A.75.75 0 0 1 7.5 3v1.5h9V3A.75.75 0 0 1 18 3v1.5h.75a3 3 0 0 1 3 3v11.25a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3V7.5a3 3 0 0 1 3-3H6V3a.75.75 0 0 1 .75-.75Zm13.5 9a1.5 1.5 0 0 0-1.5-1.5H5.25a1.5 1.5 0 0 0-1.5 1.5v7.5a1.5 1.5 0 0 0 1.5 1.5h13.5a1.5 1.5 0 0 0 1.5-1.5v-7.5Z" clipRule="evenodd" />
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-tools">
+            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+            <path d="M3 21h4l13 -13a1.5 1.5 0 0 0 -4 -4l-13 13v4" />
+            <path d="M14.5 5.5l4 4" />
+            <path d="M12 8l-5 -5l-4 4l5 5" />
+            <path d="M7 8l-1.5 1.5" />
+            <path d="M16 12l5 5l-4 4l-5 -5" />
+            <path d="M16 17l-1.5 1.5" />
           </svg>
-          <span>Plans</span>
+          <span>Tools</span>
         </a>
         <a href="#" draggable="false" className={activeIndex === 3 ? 'active' : ''} data-index={3} onClick={(event) => { event.preventDefault(); selectItem(3); }}>
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="size-6">
-            <path d="M17.004 10.407c.138.435-.216.842-.672.842h-3.465a.75.75 0 0 1-.65-.375l-1.732-3c-.229-.396-.053-.907.393-1.004a5.252 5.252 0 0 1 6.126 3.537ZM8.12 8.464c.307-.338.838-.235 1.066.16l1.732 3a.75.75 0 0 1 0 .75l-1.732 3c-.229.397-.76.5-1.067.161A5.23 5.23 0 0 1 6.75 12a5.23 5.23 0 0 1 1.37-3.536ZM10.878 17.13c-.447-.098-.623-.608-.394-1.004l1.733-3.002a.75.75 0 0 1 .65-.375h3.465c.457 0 .81.407.672.842a5.252 5.252 0 0 1-6.126 3.539Z" />
-            <path fillRule="evenodd" d="M21 12.75a.75.75 0 1 0 0-1.5h-.783a8.22 8.22 0 0 0-.237-1.357l.734-.267a.75.75 0 1 0-.513-1.41l-.735.268a8.24 8.24 0 0 0-.689-1.192l.6-.503a.75.75 0 1 0-.964-1.149l-.6.504a8.3 8.3 0 0 0-1.054-.885l.391-.678a.75.75 0 1 0-1.299-.75l-.39.676a8.188 8.188 0 0 0-1.295-.47l.136-.77a.75.75 0 0 0-1.477-.26l-.136.77a8.36 8.36 0 0 0-1.377 0l-.136-.77a.75.75 0 1 0-1.477.26l.136.77c-.448.121-.88.28-1.294.47l-.39-.676a.75.75 0 0 0-1.3.75l.392.678a8.29 8.29 0 0 0-1.054.885l-.6-.504a.75.75 0 1 0-.965 1.149l.6.503a8.243 8.243 0 0 0-.689 1.192L3.8 8.216a.75.75 0 1 0-.513 1.41l.735.267a8.222 8.222 0 0 0-.238 1.356h-.783a.75.75 0 0 0 0 1.5h.783c.042.464.122.917.238 1.356l-.735.268a.75.75 0 0 0 .513 1.41l.735-.268c.197.417.428.816.69 1.191l-.6.504a.75.75 0 0 0 .963 1.15l.601-.505c.326.323.679.62 1.054.885l-.392.68a.75.75 0 0 0 1.3.75l.39-.679c.414.192.847.35 1.294.471l-.136.77a.75.75 0 0 0 1.477.261l.137-.772a8.332 8.332 0 0 0 1.376 0l.136.772a.75.75 0 1 0 1.477-.26l-.136-.771a8.19 8.19 0 0 0 1.294-.47l.391.677a.75.75 0 0 0 1.3-.75l-.393-.679a8.29 8.29 0 0 0 1.054-.885l.601.504a.75.75 0 0 0 .964-1.15l-.6-.503c.261-.375.492-.774.69-1.191l.735.267a.75.75 0 1 0 .512-1.41l-.734-.267c.115-.439.195-.892.237-1.356h.784Zm-2.657-3.06a6.744 6.744 0 0 0-1.19-2.053 6.784 6.784 0 0 0-1.82-1.51A6.705 6.705 0 0 0 12 5.25a6.8 6.8 0 0 0-1.225.11 6.7 6.7 0 0 0-2.15.793 6.784 6.784 0 0 0-2.952 3.489.76.76 0 0 1-.036.098A6.74 6.74 0 0 0 5.251 12a6.74 6.74 0 0 0 3.366 5.842l.009.005a6.704 6.704 0 0 0 2.18.798l.022.003a6.792 6.792 0 0 0 2.368-.004 6.704 6.704 0 0 0 2.205-.811 6.785 6.785 0 0 0 1.762-1.484l.009-.01.009-.01a6.743 6.743 0 0 0 1.18-2.066c.253-.707.39-1.469.39-2.263a6.74 6.74 0 0 0-.408-2.309Z" clipRule="evenodd" />
-          </svg>
-          <span>Settings</span>
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-user-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M9 10a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" /><path d="M6.168 18.849a4 4 0 0 1 3.832 -2.849h4a4 4 0 0 1 3.834 2.855" /></svg>
+          <span>Account</span>
         </a>
         <div
           ref={indicatorRef}
@@ -335,16 +376,16 @@ const Card = () => {
           }}
         >
           <div className="moving-glass">
-          <div ref={lensRef} className="glass-scene">
-          <LiquidGlassEffect
-            menuRef={menuRef}
-            lensRef={lensRef}
-            activeIndex={activeIndex}
-            activeColor="#722F37"
-            active={isDragging || isAutoSliding}
-            {...glass}
-          />
-          </div>
+            <div ref={lensRef} className="glass-scene">
+              <LiquidGlassEffect
+                menuRef={menuRef}
+                lensRef={lensRef}
+                activeIndex={activeIndex}
+                activeColor="#722f37"
+                active={isDragging || isAutoSliding}
+                {...glass}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -369,7 +410,7 @@ const StyledWrapper = styled.div`
     width: 100%;
     max-width: 403px;
     background: #fff4;
-    
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
     padding: 8px 5px;
     border-radius: 99rem;
     display: flex;
@@ -377,6 +418,7 @@ const StyledWrapper = styled.div`
     gap: 8px;
     z-index: 50;
     touch-action: none;
+    --icon-counter-scale: 1;
     transition:
       background-color 0.24s ease,
       transform 0.42s cubic-bezier(0.2, 1.35, 0.35, 1),
@@ -387,6 +429,7 @@ const StyledWrapper = styled.div`
   .menu.is-dragging,
   .menu.is-auto-sliding {
     transform: scale(1.025);
+    --icon-counter-scale: 0.9756097561;
   }
 
   .menu::after {
@@ -394,10 +437,6 @@ const StyledWrapper = styled.div`
     position: absolute;
     inset: 0;
     border-radius: inherit;
-    box-shadow:
-      inset 0 2px 4px -3px rgba(255, 255, 255, 0.35),
-      inset 0 -2px 4px -3px rgba(255, 255, 255, 0.35),
-      inset 0 0 8px -4px rgba(255, 255, 255, 0.2);
     pointer-events: none;
     z-index: 4;
   }
@@ -407,14 +446,13 @@ const StyledWrapper = styled.div`
     z-index: 3;
     top: 3px;
     bottom: 3px;
-    left: 6px;
+    left: 9px;
     width: calc((100% - 66px) / 4);
+    box-sizing: border-box;
     margin-left: 0;
     isolation: isolate;
     background: rgba(255, 255, 255, 0.16);
-    border: 1px solid rgba(255, 255, 255, 0.5);
-    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.55);
-    transform: translateX(calc(var(--active-index) * (100% + 15.5px)));
+    transform: translateX(calc(var(--active-index) * var(--tab-step, 95px)));
     transition:
       transform 0.42s cubic-bezier(0.22, 1, 0.36, 1),
       border-radius 0.18s ease,
@@ -424,19 +462,6 @@ const StyledWrapper = styled.div`
       top 0.24s cubic-bezier(0.22, 1, 0.36, 1),
       bottom 0.24s cubic-bezier(0.22, 1, 0.36, 1);
     pointer-events: none;
-  }
-
-  .active-indicator.edge-bounce {
-    animation: edge-bounce 700ms ease-out;
-  }
-
-  @keyframes edge-bounce {
-    0%, 100% {
-      scale: 1 1;
-    }
-    35% {
-      scale: 1 0.78;
-    }
   }
 
   /* Show the existing lens for the whole drag, without an extra fade mask. */
@@ -454,8 +479,8 @@ const StyledWrapper = styled.div`
     background: rgba(255, 255, 255, 0.10);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
     pointer-events: none;
-    transform: translateX(var(--jelly-shift, 0px)) scaleX(var(--jelly-stretch, 1));
-    transform-origin: center;
+    transform: translateX(var(--jelly-shift, 0px)) scale(var(--jelly-stretch, 1), var(--jelly-stretch-y, 1));
+    transform-origin: var(--jelly-origin, 50%) 50%;
     transition: top 380ms cubic-bezier(0.22, 1, 0.36, 1),
       bottom 380ms cubic-bezier(0.22, 1, 0.36, 1),
       left 380ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -463,24 +488,20 @@ const StyledWrapper = styled.div`
       opacity 380ms ease, transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .menu.is-glass-moving .moving-glass {
-    top: -10px;
-    bottom: -10px;
+    top: -5px;
+    bottom: -5px;
     left: -14px;
     right: -14px;
     opacity: 1;
   }
 
-  /* The shell deforms while the sampled scene stays aligned with the nav. */
+  /* The glass renderer fills the moving shell, so the actual lens deforms
+     with it. The renderer measures its transformed bounds for sampling. */
   .glass-scene {
     position: absolute;
     inset: 0;
     border-radius: inherit;
-    transform-origin: center;
-    transform: translateX(var(--scene-shift, 0px)) scaleX(var(--scene-scale, 1));
-    transition: transform 210ms cubic-bezier(0.2, 1.4, 0.35, 1);
   }
-  .menu.is-dragging .glass-scene { transition: none; }
-  .menu.is-dragging a:active { transform: none; }
 
   /* On release, reveal the stable live icons immediately and let only the
      translucent shell settle. Avoid fading a distorted duplicate over them. */
@@ -489,10 +510,7 @@ const StyledWrapper = styled.div`
   }
   .menu.is-settling a {
     z-index: 5;
-    transform: none;
-    transition: none;
   }
-  .menu.is-settling .blue-overlay { opacity: 0; transition: none; }
 
   /* Drag updates already run on animation frames. Do not restart a CSS
      transform transition on every frame: that adds a second layer of lag. */
@@ -518,7 +536,7 @@ const StyledWrapper = styled.div`
   /* Keep the underlying indicator geometry identical during iOS drag and idle;
      only the separate glass shell grows. This avoids an end-of-drag offset. */
   .menu.is-ios.is-dragging .active-indicator {
-    left: 6px;
+    left: 9px;
     width: calc((100% - 66px) / 4);
   }
 
@@ -526,7 +544,7 @@ const StyledWrapper = styled.div`
     z-index: 3;
     top: 3px;
     bottom: 3px;
-    left: 6px;
+    left: 9px;
     width: calc((100% - 66px) / 4);
     margin-left: 0;
     transform: translateX(var(--drag-offset));
@@ -556,57 +574,16 @@ const StyledWrapper = styled.div`
     -webkit-tap-highlight-color: transparent;
     -webkit-user-drag: none;
     user-select: none;
+    /* Counter the menu's vertical scaling around each tab's centre. */
+    transform: scaleY(var(--icon-counter-scale));
+    transform-origin: center;
     transition:
       color 0.25s ease,
-      transform 0.18s var(--ease-spring);
+      transform 0.42s cubic-bezier(0.2, 1.35, 0.35, 1);
   }
 
   .menu a.active {
-    color: #722F37;
-  }
-
-  .blue-overlay {
-    position: absolute;
-    top: 8px;
-    bottom: 8px;
-    left: 5px;
-    right: 5px;
-    display: flex;
-    gap: 8px;
-    pointer-events: none;
-    z-index: 2;
-    color: #722F37;
-    --slot: calc((100% + 8px) / 4);
-    --pw: calc(var(--slot) - 8px);
-    --pl: calc(var(--pill-position, var(--active-index)) * var(--slot));
-    clip-path: inset(0 calc(100% - var(--pl) - var(--pw)) 0 var(--pl) round 999px);
-    transition: clip-path 0.42s cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .blue-overlay .blue-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    flex: 1 1 0;
-    min-width: 0;
-    padding: 2px 6px;
-  }
-
-  .blue-overlay .blue-item svg {
-    width: 1.4rem;
-    font-size: 1.4rem;
-  }
-
-  .blue-overlay .blue-item span {
-    font-size: 0.8rem;
-    font-weight: 600;
-    line-height: 1;
-    margin-top: 4px;
-  }
-
-  .menu.is-dragging .blue-overlay,
-  .menu.is-auto-sliding .blue-overlay {
-    transition: none;
+    color: #722f37;
   }
 
   .menu a svg {
@@ -622,7 +599,7 @@ const StyledWrapper = styled.div`
   }
 
   .menu a:active {
-    transform: scale(0.98);
+    transform: scaleY(var(--icon-counter-scale));
   }
 
   @media (max-width: 370px) {
@@ -652,11 +629,12 @@ const StyledWrapper = styled.div`
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .menu, .menu.is-dragging, .menu.is-auto-sliding { transform: none; transition: none; }
+    .menu, .menu.is-dragging, .menu.is-auto-sliding { transform: none; transition: none; --icon-counter-scale: 1; }
+    .menu a { transition: none; }
     .moving-glass, .glass-scene { transform: none; transition: none; }
     .active-indicator.edge-bounce { animation: none; }
     .active-indicator {
-      transition-duration: 0.01ms;
+      transition-duration: 4ms;
     }
   }
   .menu.is-glass-moving .active-indicator {
