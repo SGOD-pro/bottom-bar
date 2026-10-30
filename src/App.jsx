@@ -5,11 +5,11 @@ function App() {
     <div
       className="app-shell"
       style={{
-        minHeight: '100vh',
+        minHeight: '100dvh',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'rgb(232, 220, 198',
+        background: '#e8dcc6',
         padding: '24px 16px',
       }}
     >

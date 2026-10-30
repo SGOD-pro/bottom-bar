@@ -2,24 +2,24 @@ import { useEffect, useRef, useState } from 'react';
 import styled from 'styled-components';
 import LiquidGlassEffect from './LiquidEffect';
 
-const getPillTravel = (menu) => {
+const getPillTravel = (menu, isIOS = false) => {
   const menuWidth = menu.offsetWidth;
   const menuBounds = menu.getBoundingClientRect();
   const scale = menuBounds.width / menuWidth;
-  const pillWidth = (menuWidth - 34) / 4;
+  const pillWidth = (menuWidth - (isIOS ? 66 : 34)) / 4;
   // Indicator offsets are relative to the menu, not the browser viewport.
   const items = menu.querySelectorAll('a[data-index]');
   const minOffset = 0;
   const step = items.length > 1 ? items[1].offsetLeft - items[0].offsetLeft : (menuWidth - pillWidth) / 3;
   const maxOffset = minOffset + Math.max(0, items.length - 1) * step;
 
-  return { menuOrigin: menuBounds.left, scale, pillWidth, minOffset, maxOffset, step };
+  return { menuOrigin: menuBounds.left, scale, pillWidth, minOffset, maxOffset, step, menuWidth };
 };
 
 const DEFAULT_GLASS = {
   renderer: 'webgl',
-  refraction: .90,
-  bevel: 0.55,
+  refraction: .85,
+  bevel: 0.50,
   dispersion: 0.80,
   frost: 0.05,
   shine: 1.00,
@@ -32,6 +32,10 @@ const DEFAULT_GLASS = {
 const edgeShift = (position) => 6 * (Math.min(1, Math.max(0, position - 2)) - Math.max(0, 1 - position));
 
 const Card = () => {
+  const [isIOS] = useState(() => typeof navigator !== 'undefined' && (
+    /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  ));
   const [activeIndex, setActiveIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [isAutoSliding, setIsAutoSliding] = useState(false);
@@ -56,8 +60,11 @@ const Card = () => {
 
     const menu = event.currentTarget;
     const indicator = indicatorRef.current;
-    const { menuOrigin, scale, pillWidth, minOffset, maxOffset, step } = getPillTravel(menu);
-    const pointerOffset = (event.clientX - menuOrigin) / scale;
+    // Read the scaled viewport position, but reuse tab layout measured on pointer-down.
+    const { pillWidth, minOffset, maxOffset, step, menuWidth } = drag.travel;
+    const bounds = menu.getBoundingClientRect();
+    const scale = bounds.width / menuWidth || 1;
+    const pointerOffset = (event.clientX - bounds.left) / scale;
 
     if (!drag.isDragging) {
       if (Math.abs(event.clientX - drag.startX) < 5) return;
@@ -67,7 +74,16 @@ const Card = () => {
       setIsDragging(true);
     }
 
-    const rawOffset = pointerOffset - pillWidth / 2 - 5;
+    const rawOffset = pointerOffset - pillWidth / 2 - (isIOS ? 6 : 5);
+    const isAtLeftEdge = rawOffset <= minOffset;
+    const isAtRightEdge = rawOffset >= maxOffset;
+    if ((isAtLeftEdge && !drag.isAtLeftEdge) || (isAtRightEdge && !drag.isAtRightEdge)) {
+      indicator.classList.remove('edge-bounce');
+      void indicator.offsetWidth;
+      indicator.classList.add('edge-bounce');
+    }
+    drag.isAtLeftEdge = isAtLeftEdge;
+    drag.isAtRightEdge = isAtRightEdge;
     drag.targetOffset = Math.min(
       Math.max(rawOffset, minOffset),
       maxOffset,
@@ -77,21 +93,33 @@ const Card = () => {
     drag.step = step;
 
     if (drag.frameId === null) {
-      const updatePosition = () => {
+      const updatePosition = (timestamp) => {
         const currentDrag = dragRef.current;
         if (!currentDrag) return;
 
+        const elapsed = currentDrag.lastFrameTime === null
+          ? 16.67
+          : Math.min(timestamp - currentDrag.lastFrameTime, 32);
+        currentDrag.lastFrameTime = timestamp;
         const distance = currentDrag.targetOffset - currentDrag.currentOffset;
-        currentDrag.currentOffset += distance * 0.4;
-        if (Math.abs(distance) < 0.15) currentDrag.currentOffset = currentDrag.targetOffset;
+        currentDrag.currentOffset += distance * (1 - Math.exp(-elapsed / 55));
+        if (Math.abs(distance) < 0.02) currentDrag.currentOffset = currentDrag.targetOffset;
 
+        // The glass trails the moving pointer slightly, then springs to center.
+        const wobble = Math.max(-6, Math.min(6, distance * 0.20));
+        const stretch = 1 + Math.min(Math.abs(wobble) * 0.009, 0.054);
+        indicator.style.setProperty('--jelly-shift', `${wobble}px`);
+        indicator.style.setProperty('--jelly-stretch', `${stretch}`);
+        // Counter-transform the rendered scene so the icons stay in place.
+        indicator.style.setProperty('--scene-shift', `${-wobble / stretch}px`);
+        indicator.style.setProperty('--scene-scale', `${1 / stretch}`);
         indicator.style.setProperty('--drag-offset', `${currentDrag.currentOffset}px`);
         indicator.style.setProperty('--edge-shift', `${edgeShift((currentDrag.currentOffset - currentDrag.minOffset) / currentDrag.step)}px`);
         if (menuRef.current) {
           const smoothPosition = (currentDrag.currentOffset - currentDrag.minOffset) / currentDrag.step;
           menuRef.current.style.setProperty('--pill-position', smoothPosition);
         }
-        const nextIndex = Math.round(currentDrag.position);
+        const nextIndex = Math.round((currentDrag.currentOffset - currentDrag.minOffset) / currentDrag.step);
         if (nextIndex !== currentDrag.activeIndex) {
           currentDrag.activeIndex = nextIndex;
           setActiveIndex(nextIndex);
@@ -101,6 +129,10 @@ const Card = () => {
           currentDrag.frameId = requestAnimationFrame(updatePosition);
         } else {
           currentDrag.frameId = null;
+          indicator.style.setProperty('--jelly-shift', '0px');
+          indicator.style.setProperty('--jelly-stretch', '1');
+          indicator.style.setProperty('--scene-shift', '0px');
+          indicator.style.setProperty('--scene-scale', '1');
         }
       };
 
@@ -121,12 +153,14 @@ const Card = () => {
       setIsAutoSliding(false);
     }
     const menu = menuRef.current;
-    const travel = menu ? getPillTravel(menu) : null;
+    const travel = menu ? getPillTravel(menu, isIOS) : null;
+    if (!travel || !travel.step) return;
     const startOffset = travel
       ? travel.minOffset + activeIndex * travel.step
       : 0;
     dragRef.current = {
       pointerId: event.pointerId,
+      travel,
       startX: event.clientX,
       isDragging: false,
       targetOffset: startOffset,
@@ -136,6 +170,9 @@ const Card = () => {
       minOffset: travel?.minOffset ?? 0,
       step: travel?.step ?? 1,
       frameId: null,
+      lastFrameTime: null,
+      isAtLeftEdge: false,
+      isAtRightEdge: false,
     };
   };
 
@@ -152,8 +189,13 @@ const Card = () => {
     dragRef.current = null;
     setIsSettling(true);
     clearTimeout(settleTimerRef.current);
-    settleTimerRef.current = setTimeout(() => setIsSettling(false), 180);
-    indicatorRef.current.style.removeProperty('--drag-offset');
+    settleTimerRef.current = setTimeout(() => setIsSettling(false), 420);
+    indicatorRef.current.style.setProperty('--jelly-shift', '0px');
+    indicatorRef.current.style.setProperty('--jelly-stretch', '1');
+    indicatorRef.current.style.setProperty('--scene-shift', '0px');
+    indicatorRef.current.style.setProperty('--scene-scale', '1');
+    // Keep the drag transform valid until the dragging class is removed.
+    if (!isIOS) indicatorRef.current.style.removeProperty('--drag-offset');
     menuRef.current?.style.removeProperty('--pill-position');
     setActiveIndex(Math.round(drag.position));
     setIsDragging(false);
@@ -176,10 +218,10 @@ const Card = () => {
       return;
     }
 
-    const { minOffset, step } = getPillTravel(menu);
+    const { minOffset, step } = getPillTravel(menu, isIOS);
     const startOffset = minOffset + activeIndex * step;
     const targetOffset = minOffset + index * step;
-    const duration = 320;
+    const duration = 420;
     let startTime = null;
     indicator.style.setProperty('--drag-offset', `${startOffset}px`);
     indicator.style.setProperty('--edge-shift', `${edgeShift(activeIndex)}px`);
@@ -210,7 +252,7 @@ const Card = () => {
       setIsAutoSliding(false);
       setIsSettling(true);
       clearTimeout(settleTimerRef.current);
-      settleTimerRef.current = setTimeout(() => setIsSettling(false), 180);
+      settleTimerRef.current = setTimeout(() => setIsSettling(false), 420);
     };
 
     autoSlideRef.current = { frameId: requestAnimationFrame(animateSlide) };
@@ -218,9 +260,12 @@ const Card = () => {
 
   return (
     <StyledWrapper>
+      <div className="unavailable-message" role="status">
+        Nav bar not available
+      </div>
       <div
         ref={menuRef}
-        className={`menu${isDragging ? ' is-dragging' : ''}${isAutoSliding ? ' is-auto-sliding' : ''}${(isAutoSliding || isDragging || isSettling) ? ' is-glass-moving' : ''}`}
+        className={`menu${isIOS ? ' is-ios' : ''}${isDragging ? ' is-dragging' : ''}${isAutoSliding ? ' is-auto-sliding' : ''}${isSettling ? ' is-settling' : ''}${(isAutoSliding || isDragging) ? ' is-glass-moving' : ''}`}
         style={{ '--active-index': activeIndex }}
         onPointerMove={selectItemUnderPointer}
         onPointerDown={startDragging}
@@ -289,14 +334,17 @@ const Card = () => {
             borderRadius: `${Math.round(4 + glass.roundness * 22)}px`,
           }}
         >
-          <div ref={lensRef} className="moving-glass">
+          <div className="moving-glass">
+          <div ref={lensRef} className="glass-scene">
           <LiquidGlassEffect
             menuRef={menuRef}
             lensRef={lensRef}
             activeIndex={activeIndex}
             activeColor="#722F37"
+            active={isDragging || isAutoSliding}
             {...glass}
           />
+          </div>
           </div>
         </div>
       </div>
@@ -312,23 +360,33 @@ const StyledWrapper = styled.div`
   flex-direction: column;
   gap: 24px;
 
+  .unavailable-message {
+    display: none;
+  }
+
   .menu {
     position: relative;
-    width: calc(100% - 40px);
-    max-width: 440px;
-    background: #dfcdad;
-    border: 1px solid var(--glass-border);
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
-    padding: 5px;
+    width: 100%;
+    max-width: 403px;
+    background: #fff4;
+    
+    padding: 8px 5px;
     border-radius: 99rem;
     display: flex;
     justify-content: center;
     gap: 8px;
     z-index: 50;
-    touch-action: pan-y;
+    touch-action: none;
     transition:
       background-color 0.24s ease,
-      transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+      transform 0.42s cubic-bezier(0.2, 1.35, 0.35, 1),
+      opacity 0.38s ease;
+  }
+
+  /* Stay lifted for the whole drag or tap-driven slide, then spring back. */
+  .menu.is-dragging,
+  .menu.is-auto-sliding {
+    transform: scale(1.025);
   }
 
   .menu::after {
@@ -347,16 +405,16 @@ const StyledWrapper = styled.div`
   .active-indicator {
     position: absolute;
     z-index: 3;
-    top: 1px;
-    bottom: 1px;
-    left: 5px;
-    width: calc((100% - 34px) / 4);
+    top: 3px;
+    bottom: 3px;
+    left: 6px;
+    width: calc((100% - 66px) / 4);
     margin-left: 0;
     isolation: isolate;
     background: rgba(255, 255, 255, 0.16);
     border: 1px solid rgba(255, 255, 255, 0.5);
-    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.10), inset 0 1px 1px rgba(255, 255, 255, 0.55);
-    transform: translateX(calc(var(--active-index) * (100% + 8px)));
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.55);
+    transform: translateX(calc(var(--active-index) * (100% + 15.5px)));
     transition:
       transform 0.42s cubic-bezier(0.22, 1, 0.36, 1),
       border-radius 0.18s ease,
@@ -368,6 +426,19 @@ const StyledWrapper = styled.div`
     pointer-events: none;
   }
 
+  .active-indicator.edge-bounce {
+    animation: edge-bounce 700ms ease-out;
+  }
+
+  @keyframes edge-bounce {
+    0%, 100% {
+      scale: 1 1;
+    }
+    35% {
+      scale: 1 0.78;
+    }
+  }
+
   /* Show the existing lens for the whole drag, without an extra fade mask. */
   .moving-glass {
     position: absolute;
@@ -375,11 +446,21 @@ const StyledWrapper = styled.div`
     bottom: 0;
     left: 0;
     right: 0;
-    border-radius: inherit;
+    border-radius: 9999px;
+    -webkit-clip-path: inset(0 round 9999px);
+    clip-path: inset(0 round 9999px);
     overflow: hidden;
     opacity: 0;
+    background: rgba(255, 255, 255, 0.10);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
     pointer-events: none;
-    transition: inset 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 320ms ease;
+    transform: translateX(var(--jelly-shift, 0px)) scaleX(var(--jelly-stretch, 1));
+    transform-origin: center;
+    transition: top 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      bottom 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      left 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      right 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 380ms ease, transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .menu.is-glass-moving .moving-glass {
     top: -10px;
@@ -389,10 +470,41 @@ const StyledWrapper = styled.div`
     opacity: 1;
   }
 
+  /* The shell deforms while the sampled scene stays aligned with the nav. */
+  .glass-scene {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    transform-origin: center;
+    transform: translateX(var(--scene-shift, 0px)) scaleX(var(--scene-scale, 1));
+    transition: transform 210ms cubic-bezier(0.2, 1.4, 0.35, 1);
+  }
+  .menu.is-dragging .glass-scene { transition: none; }
+  .menu.is-dragging a:active { transform: none; }
+
+  /* On release, reveal the stable live icons immediately and let only the
+     translucent shell settle. Avoid fading a distorted duplicate over them. */
+  .menu:not(.is-dragging):not(.is-auto-sliding) .glass-scene {
+    visibility: hidden;
+  }
+  .menu.is-settling a {
+    z-index: 5;
+    transform: none;
+    transition: none;
+  }
+  .menu.is-settling .blue-overlay { opacity: 0; transition: none; }
+
+  /* Drag updates already run on animation frames. Do not restart a CSS
+     transform transition on every frame: that adds a second layer of lag. */
+  .menu.is-dragging .moving-glass {
+    transition: inset 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 320ms ease;
+  }
+
   .menu.is-dragging .active-indicator {
     z-index: 3;
     top: 0;
     bottom: 0;
+    left: 5px;
     width: calc((100% - 34px) / 4);
     margin-left: 0;
     transform: translateX(calc(var(--drag-offset) + var(--edge-shift, 0px)));
@@ -403,13 +515,21 @@ const StyledWrapper = styled.div`
       bottom 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
+  /* Keep the underlying indicator geometry identical during iOS drag and idle;
+     only the separate glass shell grows. This avoids an end-of-drag offset. */
+  .menu.is-ios.is-dragging .active-indicator {
+    left: 6px;
+    width: calc((100% - 66px) / 4);
+  }
+
   .menu.is-auto-sliding .active-indicator {
     z-index: 3;
-    top: 0;
-    bottom: 0;
-    width: calc((100% - 34px) / 4);
+    top: 3px;
+    bottom: 3px;
+    left: 6px;
+    width: calc((100% - 66px) / 4);
     margin-left: 0;
-    transform: translateX(calc(var(--drag-offset) + var(--edge-shift, 0px)));
+    transform: translateX(var(--drag-offset));
     transition:
       width 0.24s cubic-bezier(0.22, 1, 0.36, 1),
       margin-left 0.24s cubic-bezier(0.22, 1, 0.36, 1),
@@ -447,8 +567,8 @@ const StyledWrapper = styled.div`
 
   .blue-overlay {
     position: absolute;
-    top: 5px;
-    bottom: 5px;
+    top: 8px;
+    bottom: 8px;
     left: 5px;
     right: 5px;
     display: flex;
@@ -505,7 +625,36 @@ const StyledWrapper = styled.div`
     transform: scale(0.98);
   }
 
+  @media (max-width: 370px) {
+    .menu {
+      display: none;
+    }
+
+    .unavailable-message {
+      display: block;
+      color: #000;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .menu {
+      display: none;
+    }
+
+    .unavailable-message {
+      display: block;
+      color: #000;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
+    .menu, .menu.is-dragging, .menu.is-auto-sliding { transform: none; transition: none; }
+    .moving-glass, .glass-scene { transform: none; transition: none; }
+    .active-indicator.edge-bounce { animation: none; }
     .active-indicator {
       transition-duration: 0.01ms;
     }
@@ -526,5 +675,5 @@ const StyledWrapper = styled.div`
 }  
   `;
 
-export default Card;
 
+export default Card;
